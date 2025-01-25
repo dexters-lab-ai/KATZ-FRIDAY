@@ -127,6 +127,43 @@ class WalletService extends EventEmitter {
       }
     }
 
+    async getWalletsByNetwork(userId, network) {
+      try {
+        // Supported networks
+        const supportedNetworks = ['ethereum', 'base', 'solana'];
+    
+        // Validate the network
+        if (!supportedNetworks.includes(network)) {
+          throw new Error(`Invalid network: ${network}. Supported networks are ${supportedNetworks.join(', ')}`);
+        }
+    
+        // Fetch user document
+        const user = await User.findOne({ telegramId: userId.toString() }).lean();
+        if (!user) {
+          console.warn(`⚠️ No user found with ID: ${userId}`);
+          return [];
+        }
+    
+        console.log(`🔍 User data retrieved for ID ${userId}:`, JSON.stringify(user, null, 2));
+    
+        // Get wallets for the specified network
+        const networkWallets = user.wallets?.[network] || [];
+        const wallets = networkWallets.map((wallet) => ({
+          address: wallet.address,
+          type: wallet.type || 'internal',
+          isAutonomous: wallet.isAutonomous,
+          createdAt: wallet.createdAt,
+          network, // Add network context
+        }));
+    
+        console.log(`✅ Retrieved ${wallets.length} wallets for network ${network}:`, wallets);
+        return wallets;
+      } catch (error) {
+        console.error(`❌ Error fetching wallets for user ${userId} on network ${network}:`, error.message);
+        throw error;
+      }
+    }    
+
     async getBalance(userId, address) {
       try {
         const wallet = await this.getWallet(userId, address);

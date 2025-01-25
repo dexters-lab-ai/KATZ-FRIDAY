@@ -22,6 +22,7 @@ class NetworkStateManager {
         return true;
       } catch (error) {
         this.initialized = false;
+        console.error('Initialization error:', error);
         throw error;
       }
     })();
@@ -43,11 +44,11 @@ class NetworkStateManager {
 
   async setCurrentNetwork(userId, network) {
     await this.ensureInitialized();
-    
+
     if (!this.networks.includes(network)) {
       throw new Error(`Invalid network: ${network}`);
     }
-    
+
     await UserState.setUserData(userId, { network });
   }
 
@@ -55,72 +56,73 @@ class NetworkStateManager {
     const networkMap = {
       ethereum: 'Ethereum',
       base: 'Base',
-      solana: 'Solana'
+      solana: 'Solana',
     };
     return networkMap[network] || network;
   }
 
-  async handleNetworkSwitch(bot, chatId, network) {
+  async handleNetworkSwitch(ctx, network) {
     try {
-      await this.setCurrentNetwork(chatId, network);
-      
-      await bot.sendMessage(
-        chatId,
+      const userId = ctx.from.id;
+      await this.setCurrentNetwork(userId, network);
+
+      await ctx.reply(
         `Network switched to *${this.getNetworkDisplay(network)}* 🔄\n\n` +
         'All blockchain features will now use this network.',
         {
           parse_mode: 'Markdown',
           reply_markup: {
-            inline_keyboard: [[
-              { text: '⚙️ Back to Settings', callback_data: 'wallet_settings' },
-              { text: '😼 Main Menu', callback_data: 'back_to_menu' }
-            ]]
-          }
+            inline_keyboard: [
+              [
+                { text: '⚙️ Back to Settings', callback_data: 'wallet_settings' },
+                { text: '😼 Main Menu', callback_data: 'back_to_menu' },
+              ],
+            ],
+          },
         }
       );
     } catch (error) {
       console.error('Error switching network:', error);
-      throw error;
+      await ctx.reply('❌ Failed to switch network. Please try again.');
     }
   }
 
-  async showNetworkSelection(bot, chatId) {
+  async showNetworkSelection(ctx) {
     try {
-      const currentNetwork = await this.getCurrentNetwork(chatId);
-      const buttons = this.networks.map(network => ({
-        text: network === currentNetwork ? 
-          `${this.getNetworkDisplay(network)} ✓` : 
-          this.getNetworkDisplay(network),
-        callback_data: `network_${network}`
+      const userId = ctx.from.id;
+      const currentNetwork = await this.getCurrentNetwork(userId);
+      const buttons = this.networks.map((network) => ({
+        text: network === currentNetwork
+          ? `${this.getNetworkDisplay(network)} ✓`
+          : this.getNetworkDisplay(network),
+        callback_data: `network_${network}`,
       }));
 
-      await bot.sendMessage(
-        chatId,
+      await ctx.reply(
         '*Select Network* 🌐\n\n' +
         'Choose the blockchain network to use:\n\n' +
         '_This will affect all blockchain operations_',
-        { 
+        {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              buttons,
-              [{ text: '↩️ Back', callback_data: 'back_to_wallets' }]
-            ]
-          }
+              buttons.map((button) => [button]),
+              [{ text: '↩️ Back', callback_data: 'back_to_wallets' }],
+            ],
+          },
         }
       );
     } catch (error) {
       console.error('Error showing network selection:', error);
-      throw error;
+      await ctx.reply('❌ Failed to show network selection. Please try again.');
     }
   }
 
   // Cleanup method
   async cleanup() {
-    this.walletCache.clear();
+    console.log('Cleaning up network state...');
     this.initialized = false;
     this.initializationPromise = null;
-    this.emit('cleanup');
   }
 }
 

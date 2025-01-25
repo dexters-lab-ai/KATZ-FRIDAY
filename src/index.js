@@ -11,6 +11,8 @@ import { rateLimiter } from './core/rate-limiting/RateLimiter.js';
 import { circuitBreakers } from './core/circuit-breaker/index.js';
 
 // Service imports
+import { PriceMonitoringService } from './services/trading/PriceMonitoring.js';
+import { priceAlertService } from './services/priceAlerts.js';
 import { walletService } from './services/wallet/index.js';
 import { butlerService } from './services/butler/ButlerService.js';
 import { shopifyService } from './services/shopify/ShopifyService.js';
@@ -106,6 +108,14 @@ async function startAgent() {
     await bot.startPolling();
 
     console.log('✅ KATZ AI Agent is up and running!');
+
+    //5. Extras
+    await priceAlertService.initialize();
+
+    // Initialize Pirce Monitoring Websockets    
+    const priceMonitoringService = new PriceMonitoringService(bot);
+    await priceMonitoringService.startMonitoring();
+    
     return bot;
   } catch (error) {
     console.error('❌ Error during agent startup:', error);

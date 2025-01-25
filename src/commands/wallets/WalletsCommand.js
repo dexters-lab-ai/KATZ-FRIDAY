@@ -97,124 +97,124 @@ export class WalletsCommand extends Command {
       BREAKER_CONFIGS.botErrors
     );
   }
-
-
-  // src/commands/wallets/WalletsCommand.js
-async handleCallback(query) {
-  const action = query.data;
-  const chatId = query.message.chat.id;
-  const userInfo = query.from;
-
-  // Generate unique callback ID
-  const callbackId = `${chatId}:${action}:${Date.now()}`;
-
-  // Check if callback is already being processed
-  if (this.processingCallbacks.has(callbackId)) {
-    return true;
-  }
-
-  try {
-    this.processingCallbacks.add(callbackId);
-
-    if (action.startsWith('network_')) {
-      await this.handleAdoptNetwork(query);
-      return true;
-    } else if (action.startsWith('send_token_')) {
-      await this.handleSendToken(query);
-      return true;
-    } else if (action.startsWith('set_autonomous_')) {
-      await this.handleSetAutonomous(query);
-      return true;
-    } else if (action.startsWith('back_to_wallet_')) {
-      await this.handleBackToWallet(query);
-      return true;
-    } else if (action.startsWith('wallet_')) {
-      const address = action.replace('wallet_', '');
-      await this.handleWalletDetails(query);
-      return true;
-    } else if (action.startsWith('token_')) {
-      return this.tokenDetailsHandler.showTokenDetails(chatId, userInfo, action.replace('token_', ''));
-    } else if (action.startsWith('send_token_')) {
-      return this.sendTokenHandler.initiateSendToken(chatId, userInfo, action.replace('send_token_', ''));
-    } else if (action.startsWith('swap_token_')) {
-      return await this.swapHandler.initiateSwap(chatId, userInfo, action.replace('swap_token_', ''));
-    } else if (action.startsWith('swap_buy_') || action.startsWith('swap_sell_')) { 
-      return await this.swapHandler.handleSwapDirection(chatId, userInfo, action);
-    } else if (action === 'confirm_send_token') {
-      return await this.sendTokenHandler.executeSendToken(chatId, userInfo);
-    } else if (action === 'confirm_swap') {
-      return await this.swapHandler.executeSwap(chatId, userInfo);
-    }
-
-    const handler = this.callbackHandlers.get(action);
-    if (handler) {
-      const result = await handler(query);
-      this.isProcessingCallback = false;
-      return result;
-    }
-
-    return false;
-  } catch (error) {
-    this.isProcessingCallback = false;
-    await ErrorHandler.handle(error, this.bot, chatId);
-    return false;
-  } finally {
-    // Remove callback from processing set after a delay
-    setTimeout(() => {
-      this.processingCallbacks.delete(callbackId);
-    }, 2000);
-  }
-}
-
-
-async handleInput(msg) {
-  const state = await this.getState(msg.from.id);
-  const chatId = msg.chat.id;
   
-  try {
-    switch (state) {
-      case USER_STATES.WAITING_SEND_ADDRESS:
-        return await this.sendTokenHandler.handleAddressInput(
-          chatId,
-          msg.from,
-          msg.text
-        );
+  // src/commands/wallets/WalletsCommand.js
+  async handleCallback(query) {
+    const action = query.data;
+    const chatId = query.message.chat.id;
+    const userInfo = query.from;
 
-      case USER_STATES.WAITING_SEND_AMOUNT:
-        return await this.sendTokenHandler.handleAmountInput(
-          chatId,
-          msg.from,
-          msg.text
-        );
+    // Generate unique callback ID
+    const callbackId = `${chatId}:${action}:${Date.now()}`;
 
-      case USER_STATES.WAITING_SWAP_AMOUNT:
-        return await this.swapHandler.handleSwapAmount(
-          chatId,
-          msg.from,
-          msg.text
-        );
-
-      default:
-        return false;
+    // Check if callback is already being processed
+    if (this.processingCallbacks.has(callbackId)) {
+      return true;
     }
-  } catch (error) {
-    await ErrorHandler.handle(error, this.bot, chatId);
-    return false;
+
+    try {
+      this.processingCallbacks.add(callbackId);
+
+      if (action.startsWith('network_')) {
+        await this.handleAdoptNetwork(query);
+        return true;
+      } else if (action.startsWith('send_token_')) {
+        await this.handleSendToken(query);
+        return true;
+      } else if (action.startsWith('set_autonomous_')) {
+        await this.handleSetAutonomous(query);
+        return true;
+      } else if (action.startsWith('back_to_wallet_')) {
+        await this.handleBackToWallet(query);
+        return true;
+      } else if (action.startsWith('wallet_')) {
+        const address = action.replace('wallet_', '');
+        await this.handleWalletDetails(query);
+        return true;
+      } else if (action.startsWith('token_')) {
+        return this.tokenDetailsHandler.showTokenDetails(chatId, userInfo, action.replace('token_', ''));
+      } else if (action.startsWith('send_token_')) {
+        return this.sendTokenHandler.initiateSendToken(chatId, userInfo, action.replace('send_token_', ''));
+      } else if (action.startsWith('swap_token_')) {
+        return await this.swapHandler.initiateSwap(chatId, userInfo, action.replace('swap_token_', ''));
+      } else if (action.startsWith('swap_buy_') || action.startsWith('swap_sell_')) { 
+        return await this.swapHandler.handleSwapDirection(chatId, userInfo, action);
+      } else if (action === 'confirm_send_token') {
+        return await this.sendTokenHandler.executeSendToken(chatId, userInfo);
+      } else if (action === 'confirm_swap') {
+        return await this.swapHandler.executeSwap(chatId, userInfo);
+      }
+
+      const handler = this.callbackHandlers.get(action);
+      if (handler) {
+        const result = await handler(query);
+        this.isProcessingCallback = false;
+        return result;
+      }
+
+      return false;
+    } catch (error) {
+      this.isProcessingCallback = false;
+      await ErrorHandler.handle(error, this.bot, chatId);
+      return false;
+    } finally {
+      // Remove callback from processing set after a delay
+      setTimeout(() => {
+        this.processingCallbacks.delete(callbackId);
+      }, 2000);
+    }
   }
-}
+
+
+  async handleInput(msg) {
+    const state = await this.getState(msg.from.id);
+    const chatId = msg.chat.id;
+    
+    try {
+      switch (state) {
+        case USER_STATES.WAITING_SEND_ADDRESS:
+          return await this.sendTokenHandler.handleAddressInput(
+            chatId,
+            msg.from,
+            msg.text
+          );
+
+        case USER_STATES.WAITING_SEND_AMOUNT:
+          return await this.sendTokenHandler.handleAmountInput(
+            chatId,
+            msg.from,
+            msg.text
+          );
+
+        case USER_STATES.WAITING_SWAP_AMOUNT:
+          return await this.swapHandler.handleSwapAmount(
+            chatId,
+            msg.from,
+            msg.text
+          );
+
+        default:
+          return false;
+      }
+    } catch (error) {
+      await ErrorHandler.handle(error, this.bot, chatId);
+      return false;
+    }
+  }
 
   // Show the wallets menu
   async showWalletsMenu(chatId, userInfo) {
     const currentNetwork = await networkState.getCurrentNetwork(userInfo.id);
-    const keyboard = this.createKeyboard([
-      [{ text: '👛 View Wallets', callback_data: 'view_wallets' }],
-      [{ text: '➕ Create Wallet', callback_data: 'create_wallet' }],
-      [{ text: '🌐 Switch Network', callback_data: 'switch_network' }],
-      [{ text: '⚙️ Wallet Settings', callback_data: 'wallet_settings' }],
-      [{ text: '↩️ Back to Menu', callback_data: 'back_to_menu' }],
+    
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('👛 View Wallets', 'view_wallets')],
+      [Markup.button.callback('➕ Create Wallet', 'create_wallet')],
+      [Markup.button.callback('🌐 Switch Network', 'switch_network')],
+      [Markup.button.callback('⚙️ Wallet Settings', 'wallet_settings')],
+      [Markup.button.callback('↩️ Back to Menu', 'back_to_menu')],
     ]);
 
-    await this.bot.sendMessage(
+    await this.bot.telegram.sendMessage(
       chatId,
       `*Wallet Management* 👛\n\n` +
         `Current Network: *${networkState.getNetworkDisplay(currentNetwork)}*\n\n` +

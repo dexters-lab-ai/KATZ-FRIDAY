@@ -4,6 +4,7 @@ import { dexscreener } from '../dexscreener/index.js';
 import { cacheService } from '../cache/CacheService.js';
 import { ErrorHandler } from '../../core/errors/index.js';
 import { IntentProcessHandler } from '../ai/handlers/IntentProcessHandler.js';
+import { twitterService } from '../twitter/index.js';
 
 const CACHE_DURATION = 60000; // 1 minute
 
@@ -39,49 +40,80 @@ class TrendingService extends EventEmitter {
   }
 
   async get_trending_twitter() {
-    // Fetches from 3 - 4 top Daily Popular token accounts like MobyAI
-    return [];
-  }
+    try {
+      const fullResults = await twitterService.discoverTrenches();
+  
+      // Trim results to half (or a maximum of 6 if too large)
+      const maxResults = Math.ceil(fullResults.cashtagList.length / 2);
+      const trimmedCashtagList = fullResults.cashtagList.slice(0, maxResults);
+      const trimmedRelevantTweets = fullResults.relevantTweetTexts.slice(0, maxResults);
+  
+      return {
+        message: fullResults.message || "Twitter trends retrieved successfully.",
+        cashtagList: trimmedCashtagList || [],
+        relevantTweetTexts: trimmedRelevantTweets || [],
+      };
+    } catch (error) {
+      console.error('❌ Error in get_trending_twitter:', error.message);
+      return {
+        message: "Error fetching Twitter trends.",
+        cashtagList: [],
+        relevantTweetTexts: [],
+      };
+    }
+  }  
 
   async get_trending_coingecko() {
     const cacheKey = 'trending:coingecko';
     try {
-      // Check the cache
-      const cachedData = await cacheService.get(cacheKey);
-      if (cachedData) {
-        return cachedData;
-      }
-  
-      // Fetch trending tokens from CoinGecko
-      const trendingTokens = await this.intentProcessHandler.getCoinGeckoTrendingTokens();
-  
-      // Limit results to top 8
-      const limitedTokens = trendingTokens.slice(0, 8);
-  
-      // Cache the results
-      await cacheService.set(cacheKey, limitedTokens, CACHE_DURATION);
-  
-      return limitedTokens;
+        // Check the cache
+        const cachedData = await cacheService.get(cacheKey);
+        if (cachedData) {
+            // Always limit cached results to the top 6
+            return cachedData.slice(0, 6);
+        }
+
+        // Fetch trending tokens from CoinGecko
+        const trendingTokens = await this.intentProcessHandler.getCoinGeckoTrendingTokens();
+
+        // Limit results to top 6
+        const limitedTokens = trendingTokens.slice(0, 6);
+
+        // Cache the results
+        await cacheService.set(cacheKey, limitedTokens, CACHE_DURATION);
+
+        return limitedTokens;
     } catch (error) {
-      console.error('❌ Error fetching CoinGecko trending tokens:', error.message);
-      await ErrorHandler.handle(error);
-      return [];
+        console.error('❌ Error fetching CoinGecko trending tokens:', error.message);
+        await ErrorHandler.handle(error);
+        return [];
     }
-  }   
+  }
 
   // Fetches trending tokens for a specific network
   async getTrendingTokensByChain(network) {
     const cacheKey = `trending:chain:${network}`;
     try {
+        // Check the cache
         const cached = await cacheService.get(cacheKey);
-        if (cached) return cached;
+        if (cached) {
+            // Always limit cached results to the top 5
+            return cached.slice(0, 5);
+        }
 
+        // Fetch trending tokens from Dextools
         const dextoolsTokens = await dextools.fetchTrendingTokens(network);
 
+        // Format tokens
         const formattedTokens = dextoolsTokens.map(token => this.formatterNeeded(token));
 
-        await cacheService.set(cacheKey, formattedTokens.slice(0, 8), CACHE_DURATION); // Limit to top 8
-        return formattedTokens.slice(0, 8);
+        // Limit results to top 5
+        const limitedTokens = formattedTokens.slice(0, 5);
+
+        // Cache the results
+        await cacheService.set(cacheKey, limitedTokens, CACHE_DURATION);
+
+        return limitedTokens;
     } catch (error) {
         await ErrorHandler.handle(error);
         throw error;
@@ -103,37 +135,55 @@ class TrendingService extends EventEmitter {
       const [
         solanaTokens,
         ethereumTokens,
-        //baseTokens,
-        twitterTokens,
+        baseTokens,
+        twitterResults, // Includes both cashtagList and relevantTweetTexts
         coingeckoTokens,
       ] = await Promise.all([
         this.get_trending_solana(),
         this.get_trending_ethereum(),
-        // this.get_trending_base(),
+        this.get_trending_base(),
         this.get_trending_twitter(),
         this.get_trending_coingecko(),
       ]);
   
-      // Combine results from all sources
+      // Extract cashtagList and relevantTweetTexts from Twitter results
+      const twitterTokens = twitterResults.cashtagList || [];
+      const relevantTweets = twitterResults.relevantTweetTexts || [];
+  
+      // Combine all tokens
       const allTokens = [
-        ...solanaTokens,
-        ...ethereumTokens,
-        //...baseTokens,
-        ...twitterTokens,
-        ...coingeckoTokens,
+        ...this.ensureArray(solanaTokens),
+        ...this.ensureArray(ethereumTokens),
+        ...this.ensureArray(baseTokens),
+        ...this.ensureArray(twitterTokens),
+        ...this.ensureArray(coingeckoTokens),
       ];
   
-      // Shuffle the combined results
+      // Shuffle the combined tokens
       const shuffledTokens = this.shuffleArray(allTokens);
   
-      // Limit to 20 results after shuffling
+      // Limit tokens to 20
       const limitedTokens = shuffledTokens.slice(0, 20);
+
+      console.log("LIMITED TOKENS======================", limitedTokens);
   
-      return limitedTokens;
+      // Return combined result with tokens and tweets
+      return {
+        tokens: limitedTokens,
+        tweets: relevantTweets, // Include the trimmed list of tweets
+      };
     } catch (error) {
       await ErrorHandler.handle(error);
       throw error;
     }
+  }
+
+  // Utility to ensure the input is always an array
+  ensureArray(input) {
+    if (Array.isArray(input)) {
+      return input;
+    }
+    return input ? [input] : []; // Wrap non-array inputs in an array, or return an empty array
   }
   
   shuffleArray(array) {
@@ -153,7 +203,7 @@ class TrendingService extends EventEmitter {
       if (cached) {
         console.log('📦 Returning cached boosted tokens.');
         // Trim cached results to the latest 8
-        return cached.slice(0, 8);
+        return cached.slice(0, 6);
       }
   
       // Fetch boosted pairs
@@ -166,7 +216,7 @@ class TrendingService extends EventEmitter {
       await cacheService.set(cacheKey, formattedPairs, CACHE_DURATION);
   
       // Return only the latest 8 formatted pairs
-      return formattedPairs.slice(0, 8);
+      return formattedPairs.slice(0, 6);
     } catch (error) {
       await ErrorHandler.handle(error);
       throw error;

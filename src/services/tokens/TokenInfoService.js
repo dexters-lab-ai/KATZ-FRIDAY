@@ -184,20 +184,20 @@ class TokenInfoService extends EventEmitter {
   async subscribeToPriceUpdates(network, address, callback) {
     try {
       // Try DexScreener WebSocket first
-      const ws = await this.subscribeToDexScreener(network, address, callback);
+      const ws = await this.subscribeToQNodeWebsocket(network, address, callback);
       if (ws) return ws;
 
-      // Fallback to DexTools WebSocket
-      return await dextools.subscribeToPriceUpdates(network, address, callback);
     } catch (error) {
       await ErrorHandler.handle(error);
       throw error;
     }
   }
 
-  async subscribeToDexScreener(network, address, callback) {
+  // Do manual price checks every minute,
+  // OR USE suggested BitQuery template
+  async subscribeToQNodeWebsocket(network, address, callback) {
     try {
-      const ws = new WebSocket('wss://api.dexscreener.com/stream');
+      const ws = new WebSocket('wss://lingering-red-liquid.solana-mainnet.quiknode.pro/a2a21741d8c9370d63a0789ab9eb93f926e11764');
       
       ws.on('open', () => {
         ws.send(JSON.stringify({

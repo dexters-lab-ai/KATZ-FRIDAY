@@ -215,7 +215,7 @@ class TwitterService extends EventEmitter {
     }
   }
 
-  async searchTweetsByCashtag(userId, cashtag, minLikes = 1, minRetweets = 1, minReplies = 1) {
+  async searchTweetsByCashtag(userId, cashtag, minLikes = 0, minRetweets = 0, minReplies = 0) {
     try {
       // Check rate limits first
       await this.checkRateLimits(userId);
@@ -226,6 +226,7 @@ class TwitterService extends EventEmitter {
         console.warn('Cashtag is empty or invalid, skipping search.');
         return []; // Return empty array instead of throwing an error
       }
+      //console.log("Cleaned cashtag$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$:", cleanCashtag + " minLikes:", minLikes + " minRetweets:", minRetweets + " minReplies:", minReplies)
   
       // Check cache for the cashtag
       const cached = this.getFromCache(cleanCashtag);
@@ -241,11 +242,11 @@ class TwitterService extends EventEmitter {
         cookies: [
           "auth_token=c4b06af562684becacf328f731ef500bc40d7ba2;gt=1877600704254324976;guest_id=v1%3A173648987381985233;twid=u%3D1479073844589895680;att=1-Rfvy3D8ari2uGIrW769stMMWq02ZRanOwSnDc7S8;ct0=efafe77c36a545a6fd1648bc4f432ddd612844fbb288d56d8009996a05f9a394d9ad1d2fa62a0685c25699cc0966e61c793d0483b1cbaa3496b46cea14da48ecc6af096b5e2ed0fa6305c6458620f1fe;guest_id_ads=v1%3A173648987381985233;guest_id_marketing=v1%3A173648987381985233;kdt=O83gjfkTl8AaNp5z3JXyUGdr1k0xFZPBwD9myC97;personalization_id=v1_SkJRGfsm95VskQ4ujBPgEQ=="
         ],
-        onlyBuleVerifiedUsers: true,
+        onlyBuleVerifiedUsers: false,
         onlyVerifiedUsers: false,
         sentimentAnalysis: true,
         sortBy: "Latest",
-        maxItems: 8, // Ensure API returns only the latest 8 tweets
+        maxItems: 20, // Ensure API returns only the latest 8 tweets
         minRetweets: minRetweets,
         minLikes: minLikes,
         minReplies: minReplies
@@ -322,85 +323,131 @@ class TwitterService extends EventEmitter {
     const cacheKey = 'trenches:cashtags';
     const cached = this.getFromCache(cacheKey);
     if (cached) {
-      console.log('📦 Returning cached results for discoverTrenches');
-      return cached;
+        console.log('📦 Returning cached results for discoverTrenches');
+        return cached;
     }
 
     try {
-      const accounts = ['cookiedotfun', 'mobyagent', 'solana_daily'];
-      const tweets = await this.fetchTweetsFromAccounts(accounts);
+        const accounts = ['solana_daily', 'mobyagent', 'cookiedotfun'];
 
-      const cashtagData = tweets.reduce((acc, tweet) => {
-        const cashtags = this.extractCashtags(tweet);
-        if (!cashtags.length) return acc;
+        // Fetch tweets from all accounts independently
+        console.log('🔄 Fetching tweets sequentially from accounts...');
+        const tweetsByAccount = {};
+        for (const account of accounts) {
+            const accountTweets = await this.fetchTweetsFromAccount(account);
+            tweetsByAccount[account] = accountTweets;
+        }
 
-        const weight = 1 + tweet.favorites * 0.1 + tweet.retweets * 0.2 + tweet.replies * 0.3;
-        cashtags.forEach((cashtag) => {
-          if (!acc[cashtag]) acc[cashtag] = { score: 0, examples: [] };
-          acc[cashtag].score += weight;
-          acc[cashtag].examples.push(tweet.text);
+        // Process cashtags and tweets for each account
+        console.log('✅ Tweets fetched. Processing cashtags...');
+        const accountData = accounts.map((account) => {
+            const cashtagData = {};
+            const relevantTweets = new Map();
+
+            const tweets = tweetsByAccount[account];
+            for (const tweet of tweets) {
+                const cashtags = this.extractCashtags(tweet);
+                if (cashtags.length < 1) continue;
+
+                // Calculate tweet weight
+                const weight = 1 + (tweet.favorites || 0) * 0.1 + (tweet.retweets || 0) * 0.1 + (tweet.replies || 0) * 0.3;
+
+                cashtags.forEach((cashtag) => {
+                    if (!cashtagData[cashtag]) {
+                        cashtagData[cashtag] = { score: 0 };
+                        relevantTweets.set(cashtag, tweet.text);
+                    }
+                    cashtagData[cashtag].score += weight;
+                });
+            }
+
+            return { account, cashtagData, relevantTweets };
         });
 
-        return acc;
-      }, {});
+        // Combine cashtags and tweets from all accounts
+        console.log('✅ Combining data from all accounts...');
+        const combinedCashtagData = {};
+        const combinedRelevantTweets = new Map();
 
-      const sortedCashtags = Object.entries(cashtagData)
-        .sort((a, b) => b[1].score - a[1].score)
-        .slice(0, 30);
+        for (const { cashtagData, relevantTweets } of accountData) {
+            for (const [cashtag, data] of Object.entries(cashtagData)) {
+                if (!combinedCashtagData[cashtag]) {
+                    combinedCashtagData[cashtag] = { score: 0 };
+                    combinedRelevantTweets.set(cashtag, relevantTweets.get(cashtag));
+                }
+                combinedCashtagData[cashtag].score += data.score;
+            }
+        }
 
-      const cashtagList = sortedCashtags.map(([cashtag, data]) => ({
-        cashtag,
-        score: Math.round(data.score),
-      }));
+        // Sort and select top 12 cashtags
+        console.log('✅ Sorting cashtags...');
+        const sortedCashtags = Object.entries(combinedCashtagData)
+            .sort(([, a], [, b]) => b.score - a.score)
+            .slice(0, 12);
 
-      const cashtagExamples = Object.fromEntries(
-        sortedCashtags.map(([cashtag, data]) => [cashtag, data.examples])
-      );
+        const cashtagList = sortedCashtags.map(([cashtag, data]) => ({
+            cashtag,
+            score: Math.round(data.score),
+        }));
 
-      const results = { cashtagList, cashtagExamples };
-      this.cacheResults(cacheKey, results);
+        // Map tweets to the top 12 cashtags
+        const relevantTweetTexts = cashtagList.map(({ cashtag }) => combinedRelevantTweets.get(cashtag));
 
-      return {
-        message: 'List of popular tokens/tickers on the Twitter streets/trenches:',
-        ...results,
-      };
+        const results = { cashtagList, relevantTweetTexts };
+        console.log('🔗 Final results:', results);
+
+        // Cache the results
+        this.cacheResults(cacheKey, results);
+
+        return {
+            message: 'List of popular tokens/tickers on the Twitter streets/trenches:',
+            ...results,
+        };
     } catch (error) {
-      console.error('❌ Error in discoverTrenches:', error);
-      await ErrorHandler.handle(error);
-      throw error;
+        console.error('❌ Error in discoverTrenches:', error);
+        await ErrorHandler.handle(error);
+        throw error;
     }
-  }
+}
 
-  async fetchTweetsFromAccounts(accounts) {
-    const fetchTweetsForAccount = async (username) => {
-      const input = {
-        username,
-        max_posts: 10,
-      };
-      const run = await this.apifyClient.actor('danek/twitter-timeline').call(input);
-      const { items } = await this.apifyClient.dataset(run.defaultDatasetId).listItems();
-      return items;
-    };
+async fetchTweetsFromAccount(account) {
+    try {
+        console.log(`🔄 Fetching tweets for account: ${account}`);
+        const input = {
+            username: account,
+            max_posts: 20,
+        };
 
-    const allTweets = await Promise.all(accounts.map(fetchTweetsForAccount));
-    return allTweets.flat();
-  }
+        const run = await this.apifyClient.actor('danek/twitter-timeline').call(input);
+        const { items } = await this.apifyClient.dataset(run.defaultDatasetId).listItems();
 
-  extractCashtags(tweet) {
+        console.log(`✅ Fetched ${items.length} tweets for ${account}`);
+        return items;
+    } catch (error) {
+        console.error(`❌ Error fetching tweets for ${account}:`, error);
+        await ErrorHandler.handle(error);
+        return []; // Return an empty list if fetching fails
+    }
+}
+
+extractCashtags(tweet) {
     const cashtags = new Set();
 
+    // Extract cashtags from entities if available
     if (tweet.entities?.symbols?.length) {
-      tweet.entities.symbols.forEach((symbol) => {
-        cashtags.add(`$${symbol.text}`);
-      });
+        tweet.entities.symbols.forEach((symbol) => {
+            cashtags.add(`$${symbol.text.toUpperCase()}`); // Normalize to uppercase
+        });
     }
 
+    // Extract cashtags directly from the text
     const cashtagRegex = /\$[a-z0-9]+/gi;
     const textCashtags = tweet.text.match(cashtagRegex) || [];
-    textCashtags.forEach((ct) => cashtags.add(ct));
+    textCashtags.forEach((ct) => cashtags.add(ct.toUpperCase())); // Normalize to uppercase
 
     return Array.from(cashtags);
-  }
+}
+  
 
   getFromCache(key) {
     const cached = this.searchCache.get(key);

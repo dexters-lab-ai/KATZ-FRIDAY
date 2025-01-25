@@ -1,6 +1,6 @@
-import { Command } from '../base/Command.js';
-import { walletConnectService } from '../../services/wallet/WalletConnect.js';
-import { ErrorHandler } from '../../core/errors/index.js';
+import { Markup } from "telegraf";
+import { walletConnectService } from "../../services/wallet/WalletConnect.js";
+import { ErrorHandler } from "../../core/errors/index.js";
 
 /**
  * JWT Tokens for Secure Session Management:
@@ -11,16 +11,21 @@ import { ErrorHandler } from '../../core/errors/index.js';
  * - Refresh mechanisms ensure valid tokens without user re-authentication.
  * - JWTs are validated at every critical operation for added security.
  */
-export class ConnectWalletCommand extends Command {
+export class ConnectWalletCommand {
   constructor(bot, eventHandler) {
-    super(bot, eventHandler);
-    this.command = '/connectwallet';
-    this.description = 'Connect external wallet';
+    this.bot = bot;
+    this.command = "/connectwallet";
+    this.description = "Connect external wallet";
     this.pattern = /^(\/connectwallet|🔗 Connect Wallet)$/;
+
+    this.eventHandler = eventHandler;
+
+    // Register handlers
+    this.registerHandlers();
   }
 
   registerHandlers() {
-    this.eventHandler.on('connect_wallet', async (data) => {
+    this.eventHandler.on("connect_wallet", async (data) => {
       const { chatId, userInfo } = data;
       try {
         await this.initiateWalletConnect(chatId, userInfo);
@@ -29,7 +34,7 @@ export class ConnectWalletCommand extends Command {
       }
     });
 
-    this.eventHandler.on('disconnect_wallet', async (data) => {
+    this.eventHandler.on("disconnect_wallet", async (data) => {
       const { chatId, userInfo } = data;
       try {
         await this.disconnectWallet(chatId, userInfo);
@@ -49,22 +54,22 @@ export class ConnectWalletCommand extends Command {
   }
 
   async showConnectOptions(chatId, userInfo) {
-    const keyboard = this.createKeyboard([
-      [{ text: '🔗 Connect with Reown', callback_data: 'connect_wallet' }],
-      [{ text: '❌ Cancel', callback_data: 'back_to_wallets' }],
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback("🔗 Connect with Reown", "connect_wallet")],
+      [Markup.button.callback("❌ Cancel", "back_to_wallets")],
     ]);
 
-    await this.bot.sendMessage(
+    await this.bot.telegram.sendMessage(
       chatId,
-      '*Connect External Wallet* 🔗\n\n' +
-        'Connect your existing wallet:\n\n' +
-        '• MetaMask\n' +
-        '• Trust Wallet\n' +
-        '• Solana-Compatible Wallets\n' +
-        '• Any Reown-compatible wallet\n\n' +
-        'Choose your connection method:',
+      "*Connect External Wallet* 🔗\n\n" +
+        "Connect your existing wallet:\n\n" +
+        "• MetaMask\n" +
+        "• Trust Wallet\n" +
+        "• Solana-Compatible Wallets\n" +
+        "• Any Reown-compatible wallet\n\n" +
+        "Choose your connection method:",
       {
-        parse_mode: 'Markdown',
+        parse_mode: "Markdown",
         reply_markup: keyboard,
       }
     );
@@ -75,7 +80,7 @@ export class ConnectWalletCommand extends Command {
     const action = query.data;
     const userInfo = query.from;
 
-    if (action === 'connect_wallet' || action === 'disconnect_wallet') {
+    if (action === "connect_wallet" || action === "disconnect_wallet") {
       this.eventHandler.emit(action, { chatId, userInfo });
       return true;
     }
@@ -83,7 +88,7 @@ export class ConnectWalletCommand extends Command {
   }
 
   async initiateWalletConnect(chatId, userInfo) {
-    const loadingMsg = await this.showLoadingMessage(chatId, '🔗 Initiating connection...');
+    const loadingMsg = await this.showLoadingMessage(chatId, "🔗 Initiating connection...");
 
     try {
       // Initialize WalletConnect
@@ -95,26 +100,26 @@ export class ConnectWalletCommand extends Command {
       const session = await walletConnectService.createConnection(userInfo.id);
       const jwtToken = walletConnectService.sessions.get(userInfo.id)?.token;
 
-      await this.bot.deleteMessage(chatId, loadingMsg.message_id);
+      await this.safeDeleteMessage(chatId, loadingMsg.message_id);
 
       // Handle connection events
-      walletConnectService.once('connected', async ({ address, network }) => {
+      walletConnectService.once("connected", async ({ address, network }) => {
         try {
-          await this.bot.sendMessage(
+          const keyboard = Markup.inlineKeyboard([
+            [Markup.button.callback("👛 View Wallets", "view_wallets")],
+            [Markup.button.callback("🔄 Disconnect", "disconnect_wallet")],
+          ]);
+
+          await this.bot.telegram.sendMessage(
             chatId,
-            '✅ *Wallet Connected Successfully!*\n\n' +
+            "✅ *Wallet Connected Successfully!*\n\n" +
               `Address: \`${address}\`\n` +
               `Network: ${network}\n\n` +
-              'Your wallet is now connected and can be used for trading.\n\n' +
+              "Your wallet is now connected and can be used for trading.\n\n" +
               `🔐 *Session Token:* \`${jwtToken}\` (expires in 1 hour)`,
             {
-              parse_mode: 'Markdown',
-              reply_markup: {
-                inline_keyboard: [
-                  [{ text: '👛 View Wallets', callback_data: 'view_wallets' }],
-                  [{ text: '🔄 Disconnect', callback_data: 'disconnect_wallet' }],
-                ],
-              },
+              parse_mode: "Markdown",
+              reply_markup: keyboard,
             }
           );
         } catch (error) {
@@ -124,38 +129,47 @@ export class ConnectWalletCommand extends Command {
 
       console.log(`WalletConnect session established for user ${userInfo.id}.`);
     } catch (error) {
-      if (loadingMsg) {
-        await this.bot.deleteMessage(chatId, loadingMsg.message_id);
-      }
+      await this.safeDeleteMessage(chatId, loadingMsg.message_id);
       throw error;
     }
   }
 
   async disconnectWallet(chatId, userInfo) {
-    const loadingMsg = await this.showLoadingMessage(chatId, '🔄 Disconnecting wallet...');
+    const loadingMsg = await this.showLoadingMessage(chatId, "🔄 Disconnecting wallet...");
 
     try {
       // Disconnect WalletConnect session
       await walletConnectService.disconnect(userInfo.id);
 
-      await this.bot.deleteMessage(chatId, loadingMsg.message_id);
-      await this.bot.sendMessage(
-        chatId,
-        '✅ Wallet disconnected successfully!',
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '🔗 Connect Another', callback_data: 'connect_wallet' }],
-              [{ text: '↩️ Back', callback_data: 'back_to_wallets' }],
-            ],
-          },
-        }
-      );
+      await this.safeDeleteMessage(chatId, loadingMsg.message_id);
+
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback("🔗 Connect Another", "connect_wallet")],
+        [Markup.button.callback("↩️ Back", "back_to_wallets")],
+      ]);
+
+      await this.bot.telegram.sendMessage(chatId, "✅ Wallet disconnected successfully!", {
+        reply_markup: keyboard,
+      });
     } catch (error) {
-      if (loadingMsg) {
-        await this.bot.deleteMessage(chatId, loadingMsg.message_id);
-      }
+      await this.safeDeleteMessage(chatId, loadingMsg.message_id);
       throw error;
+    }
+  }
+
+  async showLoadingMessage(chatId, message) {
+    return this.bot.telegram.sendMessage(chatId, message);
+  }
+
+  async safeDeleteMessage(chatId, messageId) {
+    try {
+      await this.bot.telegram.deleteMessage(chatId, messageId);
+    } catch (error) {
+      if (error.response?.body?.description?.includes("message to delete not found")) {
+        console.warn(`Message ${messageId} not found; skipping deletion.`);
+      } else {
+        console.error(`Error deleting message ${messageId}:`, error);
+      }
     }
   }
 }

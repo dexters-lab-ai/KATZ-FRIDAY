@@ -21,6 +21,7 @@ class Config {
     this.solanaApiKey = process.env.SOLANA_API_KEY || 'ip7ONCr6sDycSojM_PZoWawrVM_2c0RW';
     this.apifyApiKey = process.env.APIFY_API_KEY;
     this.braveApiKey  = process.env.BRAVE_API_KEY;
+    this.bitrefillApiKey = process.env.BITREFILL_API_KEY;
 
     // ElevenLabs Configuration
     this.elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
@@ -34,6 +35,11 @@ class Config {
       evmEndpoint: process.env.QUICKNODE_EVM_ENDPOINT || 'https://api.quicknode.com/v1/your-evm-endpoint',
       solanaEndpoint: process.env.QUICKNODE_SOLANA_ENDPOINT || 'https://api.quicknode.com/v1/your-solana-endpoint'
     };
+
+    // Jupiter v6 API & Solana    
+    this.solanaEndpoint = process.env.QUICKNODE_SOLANA_ENDPOINT ?? "https://api.mainnet-beta.solana.com";
+    this.jupiterEndpoint = process.env.QUICKNODE_METIS_ENDPOINT ?? "https://public.jupiterapi.com";
+    this.jupiterPriceRPC = process.env.JUPITER_PRICE_RPC;
 
     // Dextools Configuration
     this.dextoolsBaseUrl = process.env.DEXTOOLS_BASE_URL;

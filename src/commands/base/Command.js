@@ -1,16 +1,16 @@
-import { UserState } from '../../utils/userState.js';
-import { createKeyboard } from '../../utils/keyboard.js';
-import { ERROR_MESSAGES } from '../../core/constants.js';
-import { ErrorHandler } from '../../core/errors/index.js';
+import { UserState } from "../../utils/userState.js";
+import { Markup } from "telegraf";
+import { ERROR_MESSAGES } from "../../core/constants.js";
+import { ErrorHandler } from "../../core/errors/index.js";
 
 export class Command {
   constructor(bot) {
     if (new.target === Command) {
-      throw new Error('Command is an abstract class');
+      throw new Error("Command is an abstract class");
     }
     this.bot = bot;
-    this.command = '';
-    this.description = '';
+    this.command = "";
+    this.description = "";
     this.pattern = null;
   }
 
@@ -23,40 +23,49 @@ export class Command {
   }
 
   async execute(msg) {
-    throw new Error('Command execute method must be implemented');
+    throw new Error("Command execute method must be implemented");
   }
 
   async handleCallback(query) {
-    return false;
+    return false; // Default behavior; override in subclasses
   }
 
   async handleInput(msg) {
-    return false;
+    return false; // Default behavior; override in subclasses
   }
 
-  createKeyboard(buttons, options = {}) {
-    return createKeyboard(buttons, options);
+  createKeyboard(buttons) {
+    return Markup.inlineKeyboard(
+      buttons.map((row) =>
+        row.map((button) =>
+          Markup.button.callback(button.text, button.callback_data)
+        )
+      )
+    );
   }
 
   async showErrorMessage(chatId, error, retryAction = null) {
-    const keyboard = this.createKeyboard([[
-      retryAction ? { text: '🔄 Retry', callback_data: retryAction } : null,
-      { text: '↩️ Back to Menu', callback_data: 'back_to_menu' }
-    ].filter(Boolean)]);
+    const keyboard = this.createKeyboard([
+      [
+        retryAction ? { text: "🔄 Retry", callback_data: retryAction } : null,
+        { text: "↩️ Back to Menu", callback_data: "back_to_menu" },
+      ].filter(Boolean),
+    ]);
 
-    const errorMessage = ERROR_MESSAGES[error?.code] || error?.message || ERROR_MESSAGES.GENERAL_ERROR;
+    const errorMessage =
+      ERROR_MESSAGES[error?.code] || error?.message || ERROR_MESSAGES.GENERAL_ERROR;
 
     try {
-      await this.bot.sendMessage(chatId, errorMessage, { 
+      await this.bot.sendMessage(chatId, errorMessage, {
         reply_markup: keyboard,
-        parse_mode: 'Markdown'
+        parse_mode: "Markdown",
       });
     } catch (notifyError) {
       await ErrorHandler.handle(notifyError, this.bot, chatId);
     }
   }
 
-  async showLoadingMessage(chatId, message = '😼 Processing...') {
+  async showLoadingMessage(chatId, message = "😼 Processing...") {
     return this.bot.sendMessage(chatId, message);
   }
 
@@ -64,13 +73,13 @@ export class Command {
     try {
       await this.bot.deleteMessage(chatId, messageId);
     } catch (error) {
-      console.error('Error deleting message:', error);
+      console.error("Error deleting message:", error);
     }
   }
 
   async simulateTyping(chatId, duration = 3000) {
-    await this.bot.sendChatAction(chatId, 'typing');
-    await new Promise(resolve => setTimeout(resolve, duration));
+    await this.bot.sendChatAction(chatId, "typing");
+    await new Promise((resolve) => setTimeout(resolve, duration));
   }
 
   // State management helpers

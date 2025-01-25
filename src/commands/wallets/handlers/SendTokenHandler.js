@@ -4,6 +4,7 @@ import { tradeService } from '../../../services/trading/TradeService.js';
 import { formatBalance, formatAddress } from '../utils/formatters.js';
 import { ErrorHandler } from '../../../core/errors/index.js';
 import { USER_STATES } from '../../../core/constants.js';
+import { Markup } from 'telegraf';
 
 export class SendTokenHandler {
   constructor(bot) {
@@ -14,7 +15,7 @@ export class SendTokenHandler {
     try {
       const [tokenAddress, walletAddress] = tokenData.split('_');
       const wallet = await walletService.getWallet(userInfo.id, walletAddress);
-      
+
       if (!wallet) {
         throw new Error('Wallet not found');
       }
@@ -46,16 +47,16 @@ export class SendTokenHandler {
       await this.setState(userInfo.id, USER_STATES.WAITING_SEND_ADDRESS);
 
       const message = `*Send ${token.symbol}* 📤\n\n` +
-                     `Available Balance: ${formatBalance(balance)}\n\n` +
-                     `Please enter the recipient's address:`;
+        `Available Balance: ${formatBalance(balance)}\n\n` +
+        `Please enter the recipient's address:`;
 
-      await this.bot.sendMessage(chatId, message, {
+      const keyboard = Markup.inlineKeyboard([
+        Markup.button.callback('❌ Cancel', `token_${tokenAddress}_${walletAddress}`)
+      ]);
+
+      await this.bot.telegram.sendMessage(chatId, message, {
         parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [[
-            { text: '❌ Cancel', callback_data: `token_${tokenAddress}_${walletAddress}` }
-          ]]
-        }
+        reply_markup: keyboard
       });
 
       return true;
@@ -85,17 +86,17 @@ export class SendTokenHandler {
       await this.setState(userInfo.id, USER_STATES.WAITING_SEND_AMOUNT);
 
       const message = `*Send ${userData.sendToken.symbol}* 📤\n\n` +
-                     `To: \`${formatAddress(address)}\`\n` +
-                     `Available: ${formatBalance(userData.sendToken.balance)}\n\n` +
-                     `Please enter the amount to send:`;
+        `To: \`${formatAddress(address)}\`\n` +
+        `Available: ${formatBalance(userData.sendToken.balance)}\n\n` +
+        `Please enter the amount to send:`;
 
-      await this.bot.sendMessage(chatId, message, {
+      const keyboard = Markup.inlineKeyboard([
+        Markup.button.callback('❌ Cancel', `token_${userData.sendToken.tokenAddress}_${userData.sendToken.walletAddress}`)
+      ]);
+
+      await this.bot.telegram.sendMessage(chatId, message, {
         parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [[
-            { text: '❌ Cancel', callback_data: `token_${userData.sendToken.tokenAddress}_${userData.sendToken.walletAddress}` }
-          ]]
-        }
+        reply_markup: keyboard
       });
 
       return true;
@@ -137,26 +138,24 @@ export class SendTokenHandler {
 
   async showSendConfirmation(chatId, sendData) {
     const message = `*Confirm Transaction* ✅\n\n` +
-                   `Token: ${sendData.symbol}\n` +
-                   `Amount: ${formatBalance(sendData.amount)}\n` +
-                   `To: \`${formatAddress(sendData.recipientAddress)}\`\n\n` +
-                   `Please confirm the transaction:`;
+      `Token: ${sendData.symbol}\n` +
+      `Amount: ${formatBalance(sendData.amount)}\n` +
+      `To: \`${formatAddress(sendData.recipientAddress)}\`\n\n` +
+      `Please confirm the transaction:`;
 
-    await this.bot.sendMessage(chatId, message, {
+    const keyboard = Markup.inlineKeyboard([
+      Markup.button.callback('✅ Confirm', 'confirm_send_token'),
+      Markup.button.callback('❌ Cancel', `token_${sendData.tokenAddress}_${sendData.walletAddress}`)
+    ]);
+
+    await this.bot.telegram.sendMessage(chatId, message, {
       parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [
-            { text: '✅ Confirm', callback_data: 'confirm_send_token' },
-            { text: '❌ Cancel', callback_data: `token_${sendData.tokenAddress}_${sendData.walletAddress}` }
-          ]
-        ]
-      }
+      reply_markup: keyboard
     });
   }
 
   async executeSendToken(chatId, userInfo) {
-    const loadingMsg = await this.bot.sendMessage(chatId, '📤 Sending tokens...');
+    const loadingMsg = await this.bot.telegram.sendMessage(chatId, '📤 Sending tokens...');
 
     try {
       const userData = await this.getUserData(userInfo.id);
@@ -175,34 +174,29 @@ export class SendTokenHandler {
         walletAddress
       });
 
-      if (loadingMsg) {
-        await this.bot.deleteMessage(chatId, loadingMsg.message_id);
-      }
+      await this.bot.telegram.deleteMessage(chatId, loadingMsg.message_id);
 
       // Show success message
-      await this.bot.sendMessage(chatId,
-        `✅ *Transaction Successful*\n\n` +
+      const successMessage = `✅ *Transaction Successful*\n\n` +
         `Sent ${formatBalance(amount)} ${userData.sendToken.symbol}\n` +
         `To: \`${formatAddress(recipientAddress)}\`\n\n` +
-        `Hash: \`${result.hash}\``,
-        {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '↩️ Back', callback_data: `token_${tokenAddress}_${walletAddress}` }
-            ]]
-          }
-        }
-      );
+        `Hash: \`${result.hash}\``;
+
+      const keyboard = Markup.inlineKeyboard([
+        Markup.button.callback('↩️ Back', `token_${tokenAddress}_${walletAddress}`)
+      ]);
+
+      await this.bot.telegram.sendMessage(chatId, successMessage, {
+        parse_mode: 'Markdown',
+        reply_markup: keyboard
+      });
 
       // Clear user state
       await this.clearState(userInfo.id);
 
       return true;
     } catch (error) {
-      if (loadingMsg) {
-        await this.bot.deleteMessage(chatId, loadingMsg.message_id);
-      }
+      await this.bot.telegram.deleteMessage(chatId, loadingMsg.message_id);
       await ErrorHandler.handle(error, this.bot, chatId);
       throw error;
     }

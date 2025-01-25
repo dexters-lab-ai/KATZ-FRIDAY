@@ -1,32 +1,36 @@
-import path from 'path';
-import fs from 'fs'; // Import fs for file operations
-import { createCanvas, loadImage } from 'canvas';
-import { fileURLToPath } from 'url';
-import { db } from '../../../core/database.js';
-import axios from 'axios';
+import path from "path";
+import fs from "fs"; // Import fs for file operations
+import { createCanvas, loadImage } from "canvas";
+import { fileURLToPath } from "url";
+import { db } from "../../../core/database.js";
+import axios from "axios";
+import { Markup } from "telegraf";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export class ProfileHandler {
-    constructor(bot) {
-        this.bot = bot;
-    }
-    
-    async handleProfileCommand(bot, chatId, userInfo) {
-    
-        try {
+  constructor(bot) {
+    this.bot = bot;
+  }
+
+  async handleProfileCommand(ctx) {
+    const chatId = ctx.chat.id;
+    const userInfo = ctx.from;
+
+    try {
         // Initialize database connection
         await db.connect();
         const database = db.getDatabase();
-        const usersCollection = database.collection('users');
+        const usersCollection = database.collection("users");
         const user = await usersCollection.findOne({ telegramId: userInfo.id.toString() });
-    
+
         if (!user) {
-            await bot.sendMessage(chatId, '❌ Profile not found. Please use /start to register first.', {
-            reply_markup: {
-                inline_keyboard: [[{ text: '🚀 Get Started', callback_data: 'start_command' }]],
-            },
-            });
+            await ctx.reply(
+            "❌ Profile not found. Please use /start to register first.",
+            Markup.inlineKeyboard([
+                Markup.button.callback("🚀 Get Started", "start_command"),
+            ])
+            );
             return;
         }
     
@@ -303,12 +307,14 @@ export class ProfileHandler {
             fs.unlinkSync(certificatePath);
         }
         } catch (error) {
-        console.error('Error in handleProfileCommand:', error);
-        await bot.sendMessage(chatId, '❌ An error occurred. Please try again later.', {
-            reply_markup: {
-            inline_keyboard: [[{ text: '🔄 Retry', callback_data: 'retry_profile' }]],
-            },
-        });
+            console.error("Error in handleProfileCommand:", error);
+          
+            await ctx.reply(
+              "❌ An error occurred. Please try again later.",
+              Markup.inlineKeyboard([
+                Markup.button.callback("🔄 Retry", "retry_profile"),
+              ])
+            );          
         }
     }
 }  

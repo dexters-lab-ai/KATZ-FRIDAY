@@ -2,6 +2,7 @@ import { ErrorHandler } from '../../../core/errors/index.js';
 import { User } from '../../../models/User.js';
 import { networkState } from '../../../services/networkState.js';
 import { USER_STATES } from '../../../core/constants.js';
+import { Markup } from 'telegraf';
 
 export class WalletSettingsHandler {
   constructor(bot) {
@@ -14,26 +15,17 @@ export class WalletSettingsHandler {
       const user = await User.findOne({ telegramId: userInfo.id.toString() }).lean();
       const isAutonomousEnabled = user?.settings?.trading?.autonomousEnabled || false;
 
-      const keyboard = {
-        inline_keyboard: [
-          [
-            {
-              text: `${isAutonomousEnabled ? '🔴 Disable' : '🟢 Enable'} Autonomous Trading`,
-              callback_data: 'toggle_autonomous',
-            },
-          ],
-          [{ text: '⚙️ Adjust Slippage', callback_data: 'slippage_settings' }],
-          [{ text: '🔔 Notification Settings', callback_data: 'notification_settings' }],
-          [{ text: '🫅 Butler Assistant', callback_data: 'butler_assistant' }],
-          [{ text: '↩️ Back', callback_data: 'back_to_wallets' }],
-        ],
-      };
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback(`${isAutonomousEnabled ? '🔴 Disable' : '🟢 Enable'} Autonomous Trading`, 'toggle_autonomous')],
+        [Markup.button.callback('⚙️ Adjust Slippage', 'slippage_settings')],
+        [Markup.button.callback('🔔 Notification Settings', 'notification_settings')],
+        [Markup.button.callback('🫅 Butler Assistant', 'butler_assistant')],
+        [Markup.button.callback('↩️ Back', 'back_to_wallets')],
+      ]);
 
-      await this.bot.sendMessage(
+      await this.bot.telegram.sendMessage(
         chatId,
-        `*Wallet Settings* ⚙️\n\nAutonomous Trading: ${
-          isAutonomousEnabled ? '✅ Enabled' : '❌ Disabled'
-        }\n\nConfigure your wallet settings:`,
+        `*Wallet Settings* ⚙️\n\nAutonomous Trading: ${isAutonomousEnabled ? '✅ Enabled' : '❌ Disabled'}\n\nConfigure your wallet settings:`,
         { parse_mode: 'Markdown', reply_markup: keyboard }
       );
       return true;
@@ -49,16 +41,14 @@ export class WalletSettingsHandler {
       const user = await User.findOne({ telegramId: userInfo.id.toString() }).lean();
       const slippage = user?.settings?.trading?.slippage || { ethereum: 3, base: 3, solana: 3 };
 
-      const keyboard = {
-        inline_keyboard: [
-          [{ text: `ETH (${slippage.ethereum}%)`, callback_data: 'adjust_eth_slippage' }],
-          [{ text: `Base (${slippage.base}%)`, callback_data: 'adjust_base_slippage' }],
-          [{ text: `Solana (${slippage.solana}%)`, callback_data: 'adjust_sol_slippage' }],
-          [{ text: '↩️ Back', callback_data: 'wallet_settings' }],
-        ],
-      };
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback(`ETH (${slippage.ethereum}%)`, 'adjust_eth_slippage')],
+        [Markup.button.callback(`Base (${slippage.base}%)`, 'adjust_base_slippage')],
+        [Markup.button.callback(`Solana (${slippage.solana}%)`, 'adjust_sol_slippage')],
+        [Markup.button.callback('↩️ Back', 'wallet_settings')],
+      ]);
 
-      await this.bot.sendMessage(
+      await this.bot.telegram.sendMessage(
         chatId,
         `*Slippage Settings* ⚙️\n\nCurrent slippage tolerance:\n` +
           `• Ethereum: ${slippage.ethereum}%\n` +
@@ -79,13 +69,14 @@ export class WalletSettingsHandler {
       await this.setState(userInfo.id, USER_STATES.WAITING_SLIPPAGE_INPUT);
       await this.setUserData(userInfo.id, { pendingSlippage: { network } });
 
-      await this.bot.sendMessage(
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', 'slippage_settings')]
+      ]);
+
+      await this.bot.telegram.sendMessage(
         chatId,
         `*Adjust Slippage for ${network.toUpperCase()}* ⚙️\n\nEnter a value between 0.1 and 50:`,
-        {
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'slippage_settings' }]] },
-        }
+        { parse_mode: 'Markdown', reply_markup: keyboard }
       );
       return true;
     } catch (error) {
@@ -105,13 +96,14 @@ export class WalletSettingsHandler {
         { $set: { 'settings.trading.autonomousEnabled': newState } }
       );
 
-      await this.bot.sendMessage(
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('↩️ Back', 'wallet_settings')],
+      ]);
+
+      await this.bot.telegram.sendMessage(
         chatId,
         `✅ Autonomous trading has been *${newState ? 'enabled' : 'disabled'}*.`,
-        {
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '↩️ Back', callback_data: 'wallet_settings' }]] },
-        }
+        { parse_mode: 'Markdown', reply_markup: keyboard }
       );
       return true;
     } catch (error) {
@@ -126,19 +118,12 @@ export class WalletSettingsHandler {
       const user = await User.findOne({ telegramId: userInfo.id.toString() }).lean();
       const notificationsEnabled = user?.settings?.notifications?.enabled || false;
 
-      const keyboard = {
-        inline_keyboard: [
-          [
-            {
-              text: notificationsEnabled ? '🔕 Disable Notifications' : '🔔 Enable Notifications',
-              callback_data: 'toggle_notifications',
-            },
-          ],
-          [{ text: '↩️ Back', callback_data: 'wallet_settings' }],
-        ],
-      };
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback(notificationsEnabled ? '🔕 Disable Notifications' : '🔔 Enable Notifications', 'toggle_notifications')],
+        [Markup.button.callback('↩️ Back', 'wallet_settings')],
+      ]);
 
-      await this.bot.sendMessage(
+      await this.bot.telegram.sendMessage(
         chatId,
         `*Notification Settings* 🔔\n\nCurrent status: ${notificationsEnabled ? '✅ Enabled' : '❌ Disabled'}`,
         { parse_mode: 'Markdown', reply_markup: keyboard }
@@ -156,18 +141,19 @@ export class WalletSettingsHandler {
       const user = await User.findOne({ telegramId: userInfo.id.toString() }).lean();
       const newState = !user?.settings?.notifications?.enabled;
 
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('↩️ Back', 'notification_settings')],
+      ]);
+
       await User.updateOne(
         { telegramId: userInfo.id.toString() },
         { $set: { 'settings.notifications.enabled': newState } }
       );
 
-      await this.bot.sendMessage(
+      await this.bot.telegram.sendMessage(
         chatId,
         `✅ Notifications have been *${newState ? 'enabled' : 'disabled'}*.`,
-        {
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '↩️ Back', callback_data: 'notification_settings' }]] },
-        }
+        { parse_mode: 'Markdown', reply_markup: keyboard }
       );
       return true;
     } catch (error) {
@@ -182,18 +168,19 @@ export class WalletSettingsHandler {
       const user = await User.findOne({ telegramId: userInfo.id.toString() }).lean();
       const newState = !user?.settings?.butler?.enabled;
 
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('↩️ Back', 'wallet_settings')],
+      ]);
+
       await User.updateOne(
         { telegramId: userInfo.id.toString() },
         { $set: { 'settings.butler.enabled': newState } }
       );
 
-      await this.bot.sendMessage(
+      await this.bot.telegram.sendMessage(
         chatId,
         `✅ Butler Assistant has been *${newState ? 'enabled' : 'disabled'}*.`,
-        {
-          parse_mode: 'Markdown',
-          reply_markup: { inline_keyboard: [[{ text: '↩️ Back', callback_data: 'wallet_settings' }]] },
-        }
+        { parse_mode: 'Markdown', reply_markup: keyboard }
       );
       return true;
     } catch (error) {
@@ -207,10 +194,14 @@ export class WalletSettingsHandler {
     try {
       await networkState.handleNetworkSwitch(this.bot, chatId, network);
 
-      await this.bot.sendMessage(
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('↩️ Back', 'wallet_settings')],
+      ]);
+
+      await this.bot.telegram.sendMessage(
         chatId,
         `✅ Network switched to *${network.toUpperCase()}* successfully.`,
-        { parse_mode: 'Markdown', reply_markup: { inline_keyboard: [[{ text: '↩️ Back', callback_data: 'wallet_settings' }]] } }
+        { parse_mode: 'Markdown', reply_markup: keyboard }
       );
       return true;
     } catch (error) {

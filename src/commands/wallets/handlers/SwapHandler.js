@@ -2,6 +2,7 @@ import { User } from '../../../models/User.js';
 import { swapService } from '../../../services/trading/SwapService.js';
 import { ErrorHandler } from '../../../core/errors/index.js';
 import { USER_STATES } from '../../../core/constants.js';
+import { Markup } from 'telegraf';
 
 export class SwapHandler {
   constructor(bot) {
@@ -9,14 +10,13 @@ export class SwapHandler {
   }
 
   async initiateSwap(chatId, userInfo, tokenData) {
-    const loadingMsg = await this.bot.sendMessage(chatId, '🔍 Analyzing token...');
+    const loadingMsg = await this.bot.telegram.sendMessage(chatId, '🔍 Analyzing token...');
 
     try {
       const [tokenAddress, walletAddress] = tokenData.split('_');
-      
       const { token, walletInfo, balance } = await swapService.getTokenDetails(
-        userInfo, 
-        tokenAddress, 
+        userInfo,
+        tokenAddress,
         walletAddress
       );
 
@@ -27,41 +27,39 @@ export class SwapHandler {
           walletAddress,
           network: walletInfo.network,
           symbol: token.symbol,
-          balance
-        }
+          balance,
+        },
       });
 
       await this.setState(userInfo.id, USER_STATES.WAITING_SWAP_DIRECTION);
 
-      const keyboard = {
-        inline_keyboard: [
-          [
-            { text: '📈 Buy', callback_data: `swap_buy_${tokenAddress}_${walletAddress}` },
-            { text: '📉 Sell', callback_data: `swap_sell_${tokenAddress}_${walletAddress}` }
-          ],
-          [{ text: '❌ Cancel', callback_data: `token_${tokenAddress}_${walletAddress}` }]
-        ]
-      };
+      const keyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback('📈 Buy', `swap_buy_${tokenAddress}_${walletAddress}`),
+          Markup.button.callback('📉 Sell', `swap_sell_${tokenAddress}_${walletAddress}`),
+        ],
+        [Markup.button.callback('❌ Cancel', `token_${tokenAddress}_${walletAddress}`)],
+      ]);
 
       if (loadingMsg) {
-        await this.bot.deleteMessage(chatId, loadingMsg.message_id);
+        await this.bot.telegram.deleteMessage(chatId, loadingMsg.message_id);
       }
 
-      await this.bot.sendMessage(
+      await this.bot.telegram.sendMessage(
         chatId,
         `*${token.symbol} Swap* 💱\n\n` +
-        `Available Balance: ${balance}\n\n` +
-        `Choose your action:`,
+          `Available Balance: ${balance}\n\n` +
+          `Choose your action:`,
         {
           parse_mode: 'Markdown',
-          reply_markup: keyboard
+          reply_markup: keyboard,
         }
       );
 
       return true;
     } catch (error) {
       if (loadingMsg) {
-        await this.bot.deleteMessage(chatId, loadingMsg.message_id);
+        await this.bot.telegram.deleteMessage(chatId, loadingMsg.message_id);
       }
       await ErrorHandler.handle(error, this.bot, chatId);
       throw error;
@@ -72,7 +70,7 @@ export class SwapHandler {
     try {
       const [direction, tokenAddress, walletAddress] = action.split('_').slice(1);
       const userData = await this.getUserData(userInfo.id);
-      
+
       if (!userData?.swapToken) {
         throw new Error('Swap data not found');
       }
@@ -84,18 +82,18 @@ export class SwapHandler {
       // Ask for amount
       await this.setState(userInfo.id, USER_STATES.WAITING_SWAP_AMOUNT);
 
-      await this.bot.sendMessage(
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', `token_${tokenAddress}_${walletAddress}`)],
+      ]);
+
+      await this.bot.telegram.sendMessage(
         chatId,
         `*${direction.toUpperCase()} ${userData.swapToken.symbol}* 💱\n\n` +
-        `Available: ${userData.swapToken.balance}\n\n` +
-        `Please enter the amount to ${direction}:`,
+          `Available: ${userData.swapToken.balance}\n\n` +
+          `Please enter the amount to ${direction}:`,
         {
           parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '❌ Cancel', callback_data: `token_${tokenAddress}_${walletAddress}` }
-            ]]
-          }
+          reply_markup: keyboard,
         }
       );
 
@@ -144,29 +142,29 @@ export class SwapHandler {
       swapData.amount
     );
 
-    await this.bot.sendMessage(
+    const keyboard = Markup.inlineKeyboard([
+      [
+        Markup.button.callback('✅ Confirm', 'confirm_swap'),
+        Markup.button.callback('❌ Cancel', `token_${swapData.tokenAddress}_${swapData.walletAddress}`),
+      ],
+    ]);
+
+    await this.bot.telegram.sendMessage(
       chatId,
       `*Confirm Swap* ✅\n\n` +
-      `Action: ${details.direction.toUpperCase()}\n` +
-      `Token: ${details.token}\n` +
-      `Amount: ${details.amount}\n\n` +
-      `Please confirm the swap:`,
+        `Action: ${details.direction.toUpperCase()}\n` +
+        `Token: ${details.token}\n` +
+        `Amount: ${details.amount}\n\n` +
+        `Please confirm the swap:`,
       {
         parse_mode: 'Markdown',
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: '✅ Confirm', callback_data: 'confirm_swap' },
-              { text: '❌ Cancel', callback_data: `token_${swapData.tokenAddress}_${swapData.walletAddress}` }
-            ]
-          ]
-        }
+        reply_markup: keyboard,
       }
     );
   }
 
   async executeSwap(chatId, userInfo) {
-    const loadingMsg = await this.bot.sendMessage(chatId, '💱 Processing swap...');
+    const loadingMsg = await this.bot.telegram.sendMessage(chatId, '💱 Processing swap...');
 
     try {
       const userData = await this.getUserData(userInfo.id);
@@ -177,22 +175,22 @@ export class SwapHandler {
       const result = await swapService.executeSwap(userData.swapToken);
 
       if (loadingMsg) {
-        await this.bot.deleteMessage(chatId, loadingMsg.message_id);
+        await this.bot.telegram.deleteMessage(chatId, loadingMsg.message_id);
       }
 
-      await this.bot.sendMessage(
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('↩️ Back', `token_${userData.swapToken.tokenAddress}_${userData.swapToken.walletAddress}`)],
+      ]);
+
+      await this.bot.telegram.sendMessage(
         chatId,
         `✅ *Swap Successful*\n\n` +
-        `${userData.swapToken.direction.toUpperCase()} ${userData.swapToken.amount} ${userData.swapToken.symbol}\n` +
-        `Price: $${result.price}\n` +
-        `Hash: \`${result.hash}\``,
+          `${userData.swapToken.direction.toUpperCase()} ${userData.swapToken.amount} ${userData.swapToken.symbol}\n` +
+          `Price: $${result.price}\n` +
+          `Hash: \`${result.hash}\``,
         {
           parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[
-              { text: '↩️ Back', callback_data: `token_${userData.swapToken.tokenAddress}_${userData.swapToken.walletAddress}` }
-            ]]
-          }
+          reply_markup: keyboard,
         }
       );
 
@@ -200,7 +198,7 @@ export class SwapHandler {
       return true;
     } catch (error) {
       if (loadingMsg) {
-        await this.bot.deleteMessage(chatId, loadingMsg.message_id);
+        await this.bot.telegram.deleteMessage(chatId, loadingMsg.message_id);
       }
       await ErrorHandler.handle(error, this.bot, chatId);
       throw error;

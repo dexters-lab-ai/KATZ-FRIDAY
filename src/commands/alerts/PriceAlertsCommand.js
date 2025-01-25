@@ -1,14 +1,15 @@
-import { BaseCommand } from '../base/BaseCommand.js';
-import { AlertHandler } from './handlers/AlertHandler.js';
-import { USER_STATES } from '../../core/constants.js';
-import { ErrorHandler } from '../../core/errors/index.js';
-import { FlowManager } from '../../services/ai/flows/FlowManager.js';
+import { BaseCommand } from "../base/BaseCommand.js";
+import { AlertHandler } from "./handlers/AlertHandler.js";
+import { USER_STATES } from "../../core/constants.js";
+import { ErrorHandler } from "../../core/errors/index.js";
+import { FlowManager } from "../../services/ai/flows/FlowManager.js";
+import { Markup } from "telegraf";
 
 export class PriceAlertsCommand extends BaseCommand {
   constructor(bot, eventHandler) {
     super(bot);
-    this.command = '/pricealerts';
-    this.description = 'Set price alerts';
+    this.command = "/pricealerts";
+    this.description = "Set price alerts";
     this.pattern = /^(\/pricealerts|💰 Price Alerts)$/;
 
     this.alertHandler = new AlertHandler(bot);
@@ -19,11 +20,21 @@ export class PriceAlertsCommand extends BaseCommand {
   }
 
   registerCallbacks() {
-    this.eventHandler.on('create_price_alert', async (query) => this.handleCreatePriceAlert(query));
-    this.eventHandler.on('enable_swap', async (query) => this.handleEnableSwap(query));
-    this.eventHandler.on('skip_swap', async (query) => this.handleSkipSwap(query));
-    this.eventHandler.on('confirm_alert', async (query) => this.handleConfirmAlert(query));
-    this.eventHandler.on('back_to_price_alerts', async (query) => this.handleBackToPriceAlerts(query));
+    this.eventHandler.on("create_price_alert", async (query) =>
+      this.handleCreatePriceAlert(query)
+    );
+    this.eventHandler.on("enable_swap", async (query) =>
+      this.handleEnableSwap(query)
+    );
+    this.eventHandler.on("skip_swap", async (query) =>
+      this.handleSkipSwap(query)
+    );
+    this.eventHandler.on("confirm_alert", async (query) =>
+      this.handleConfirmAlert(query)
+    );
+    this.eventHandler.on("back_to_price_alerts", async (query) =>
+      this.handleBackToPriceAlerts(query)
+    );
   }
 
   async execute(msg) {
@@ -36,22 +47,22 @@ export class PriceAlertsCommand extends BaseCommand {
   }
 
   async showPriceAlertsMenu(chatId, userInfo) {
-    const keyboard = this.createKeyboard([
-      [{ text: '➕ Create Alert', callback_data: 'create_price_alert' }],
-      [{ text: '📋 View Alerts', callback_data: 'view_price_alerts' }],
-      [{ text: '↩️ Back', callback_data: 'back_to_notifications' }],
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback("➕ Create Alert", "create_price_alert")],
+      [Markup.button.callback("📋 View Alerts", "view_price_alerts")],
+      [Markup.button.callback("↩️ Back", "back_to_notifications")],
     ]);
 
     await this.bot.sendMessage(
       chatId,
-      '*Price Alerts* 🔔\n\n' +
-        'Create and manage price alerts:\n\n' +
-        '• Set target prices\n' +
-        '• Enable auto-swaps\n' +
-        '• Multi-token monitoring\n' +
-        '• Real-time notifications',
+      "*Price Alerts* 🔔\n\n" +
+        "Create and manage price alerts:\n\n" +
+        "• Set target prices\n" +
+        "• Enable auto-swaps\n" +
+        "• Multi-token monitoring\n" +
+        "• Real-time notifications",
       {
-        parse_mode: 'Markdown',
+        parse_mode: "Markdown",
         reply_markup: keyboard,
       }
     );
@@ -63,21 +74,22 @@ export class PriceAlertsCommand extends BaseCommand {
 
     try {
       // Start alert flow with initial data
-      const result = await this.flowManager.startFlow(userInfo.id, 'alert', {
+      const result = await this.flowManager.startFlow(userInfo.id, "alert", {
         chatId,
         userInfo,
-        type: 'price_alert'
+        type: "price_alert",
       });
 
       // Show initial prompt based on flow response
       await this.bot.sendMessage(
         chatId,
-        result.response || '*Create Price Alert* 🎯\n\nPlease enter the token address:',
+        result.response ||
+          "*Create Price Alert* 🎯\n\nPlease enter the token address:",
         {
-          parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'back_to_price_alerts' }]],
-          },
+          parse_mode: "Markdown",
+          reply_markup: Markup.inlineKeyboard([
+            [Markup.button.callback("❌ Cancel", "back_to_price_alerts")],
+          ]),
         }
       );
     } catch (error) {
@@ -97,12 +109,12 @@ export class PriceAlertsCommand extends BaseCommand {
 
       // Continue the flow with user input
       const result = await this.flowManager.continueFlow(userId, msg.text);
-      
+
       // Handle flow response
       if (result.response) {
         await this.bot.sendMessage(chatId, result.response, {
-          parse_mode: 'Markdown',
-          reply_markup: result.keyboard
+          parse_mode: "Markdown",
+          reply_markup: Markup.inlineKeyboard(result.keyboard || []),
         });
       }
 
@@ -128,7 +140,10 @@ export class PriceAlertsCommand extends BaseCommand {
     try {
       // Check if callback is for flow
       if (this.flowManager.isInFlow(query.from.id)) {
-        const result = await this.flowManager.handleCallback(query.from.id, action);
+        const result = await this.flowManager.handleCallback(
+          query.from.id,
+          action
+        );
         if (result.handled) return;
       }
 
@@ -177,7 +192,11 @@ export class PriceAlertsCommand extends BaseCommand {
 
     try {
       const alertData = await this.getUserData(userInfo.id);
-      await this.alertHandler.savePriceAlert(chatId, userInfo, alertData.pendingAlert);
+      await this.alertHandler.savePriceAlert(
+        chatId,
+        userInfo,
+        alertData.pendingAlert
+      );
       await this.clearState(userInfo.id);
     } catch (error) {
       await ErrorHandler.handle(error, this.bot, chatId);
@@ -198,22 +217,22 @@ export class PriceAlertsCommand extends BaseCommand {
     const userData = await this.getUserData(userInfo.id);
     const { pendingAlert } = userData;
 
-    const keyboard = this.createKeyboard([
+    const keyboard = Markup.inlineKeyboard([
       [
-        { text: '✅ Confirm', callback_data: 'confirm_alert' },
-        { text: '❌ Cancel', callback_data: 'back_to_price_alerts' },
+        Markup.button.callback("✅ Confirm", "confirm_alert"),
+        Markup.button.callback("❌ Cancel", "back_to_price_alerts"),
       ],
     ]);
 
     await this.bot.sendMessage(
       chatId,
-      '*Confirm Price Alert* ✅\n\n' +
+      "*Confirm Price Alert* ✅\n\n" +
         `Token: ${pendingAlert.tokenInfo.symbol}\n` +
         `Target Price: $${pendingAlert.targetPrice}\n` +
         `Condition: ${pendingAlert.condition}\n` +
         `Network: ${networkState.getNetworkDisplay(pendingAlert.network)}`,
       {
-        parse_mode: 'Markdown',
+        parse_mode: "Markdown",
         reply_markup: keyboard,
       }
     );

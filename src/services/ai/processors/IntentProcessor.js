@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
+import { Telegraf } from 'telegraf';
 import { networkState } from '../../networkState.js';
 import { ErrorHandler } from '../../../core/errors/index.js';
-import { TRADING_INTENTS } from '../intents.js';
 import { IntentProcessHandler } from '../handlers/IntentProcessHandler.js';
 import { validateParameters, getParameterConfig, formatParameters } from '../config/parameterConfig.js';
 
@@ -16,6 +16,7 @@ import { flipperMode } from '../../pumpfun/FlipperMode.js';
 import { priceAlertService } from '../../priceAlerts.js';
 import { timedOrderService } from '../../timedOrders.js';
 import { walletService } from '../../wallet/index.js';
+import { SolanaSwapService } from '../../trading/SolanaSwapService.js';
 import { tokenApprovalService } from '../../tokens/TokenApprovalService.js';
 import { solanaPayService } from '../../solanaPay/SolanaPayService.js';
 import { shopifyService } from '../../shopify/ShopifyService.js';
@@ -23,14 +24,18 @@ import { butlerService } from '../../butler/ButlerService.js';
 import { dbAIInterface } from '../../db/DBAIInterface.js';
 import { contextManager } from '../ContextManager.js';
 import { dexscreener } from '../../dexscreener/index.js';
+import BitrefillService from "../../bitrefill/BitrefillService.js";
 
 export class IntentProcessor extends EventEmitter {
-  constructor() {
+  constructor(bot) {
     super();
+    this.bot = bot; 
     this.initialized = false;
     this.intentProcessHandler = new IntentProcessHandler(); 
     this.dextools = dextools;
     this.dexscreener = dexscreener;
+    this.bitrefillService = new BitrefillService(bot);
+    this.solanaSwapService = new SolanaSwapService();
   }
 
   async initialize() {
@@ -54,31 +59,267 @@ export class IntentProcessor extends EventEmitter {
   }
 
   // Helper methods for intent execution
-  async swapTokens(params, network) {
-    if (!params.tokenAddress || !params.amount) {
-      throw new Error('Missing required trade parameters');
+  async swapTokens(params) {
+    // Validate parameters
+    if (!params.wallet || !params.inputMint || !params.outputMint || !params.amount) {
+        throw new Error('Missing required trade parameters: wallet, inputMint, outputMint, and amount are mandatory.');
     }
 
-    return await tradeService.executeTrade({
-      network,
-      userId: params.userId,
-      action: params.action,
-      tokenAddress: params.tokenAddress,
-      amount: params.amount,
-      options: params.options
-    });
+    try {
+        console.log('🔄 Initiating token swap...');
+
+        // Pass parameters to SolanaSwapService for processing
+        const swapResult = await this.solanaSwapService.startJupiterSwap({
+            wallet: params.wallet,            // User's wallet (Keypair instance)
+            inputMint: params.inputMint,      // Mint address of the token to swap
+            outputMint: params.outputMint,    // Mint address of the token to receive
+            amount: params.amount,            // Amount to swap in smallest token units
+        });
+
+        console.log('✅ Swap completed successfully:', swapResult);
+        return { swapResult };
+    } catch (error) {
+        console.error('❌ Error during token swap:', error.message);
+        throw new Error('Failed to complete token swap.');
+    }
   }
 
-  async createPriceAlert(params, network) {
-    return await priceAlertService.createAlert(params.userId, {
-      tokenAddress: params.tokenAddress,
-      targetPrice: params.targetPrice,
-      condition: params.condition,
-      network,
-      walletAddress: params.walletAddress,
-      swapAction: params.swapAction
-    });
+  async createPriceAlert(userId, chatId, params) {
+    let logMessageId = null;
+  
+    const log = async (chatId, message) => {
+      if (!chatId) return; // Skip logging if chatId is unavailable
+      try {
+        if (!logMessageId) {
+          const sentMessage = await this.bot.sendMessage(chatId, message);
+          logMessageId = sentMessage.message_id;
+        } else {
+          await this.bot.telegram.editMessageText(chatId, logMessageId, null, message);
+        }
+      } catch (err) {
+        console.warn('⚠️ Error logging message:', err.message);
+      }
+    };
+  
+    try {
+  
+      // Step 1: Log the start of the operation
+      await log(chatId, '🚀 Creating price alert...');
+  
+      // Step 2: Determine the network and token info
+      const tokenData = await this.getTokenNetwork(params.tokenAddress);
+      if (!tokenData) {
+        throw new Error('Unable to determine the network or find token information.');
+      }
+  
+      const { network, tokenInfo } = tokenData;
+      await log(chatId, `✅ Network determined: ${network}\n\nToken Info:\n- Symbol: ${tokenInfo.symbol}\n- Address: ${tokenInfo.address}`);
+  
+      // Step 3: Get user wallet address
+      const wallets = await walletService.getWalletsByNetwork(userId, network);
+      if (!wallets.length) {
+        throw new Error(`No wallets found for network ${network}. Please add a wallet for this network.`);
+      }
+  
+      const walletAddress = wallets[0].address;
+      await log(chatId, `✅ Using wallet: ${walletAddress}`);
+  
+      // Step 4: Validate and prepare alert data
+      if (!params.targetPrice || typeof params.targetPrice !== 'number' || params.targetPrice <= 0) {
+        throw new Error('Invalid target price. It must be a positive number.');
+      }
+  
+      if (!['above', 'below'].includes(params.condition)) {
+        throw new Error('Invalid condition. Must be "above" or "below".');
+      }
+  
+      const alertData = {
+        tokenAddress: params.tokenAddress,
+        network,
+        targetPrice: params.targetPrice,
+        condition: params.condition,
+        walletType: 'internal', // Default to internal wallet type
+        swapAction: params.swapAction || { enabled: false }, // Default swapAction structure
+        walletAddress,
+      };
+  
+      // Step 5: Create the price alert
+      const alert = await priceAlertService.createAlert(userId, alertData);
+  
+      await log(chatId, `🎉 Price alert created successfully!\nToken: ${tokenInfo.symbol}\nTarget Price: ${params.targetPrice}\nCondition: ${params.condition}`);
+  
+      // Schedule deletion of the log message after 30 seconds
+      setTimeout(async () => {
+        try {
+          if (logMessageId) {
+            await this.bot.telegram.deleteMessage(chatId, logMessageId);
+          }
+        } catch (err) {
+          console.warn('⚠️ Could not delete log message:', err.message);
+        }
+      }, 30000);
+  
+      return alert;
+    } catch (error) {
+      const chatId = params.chatId;
+      await log(chatId, `❌ Error: ${error.message}`);
+  
+      // Schedule deletion of the error log message after 30 seconds
+      setTimeout(async () => {
+        try {
+          if (logMessageId) {
+            await this.bot.telegram.deleteMessage(chatId, logMessageId);
+          }
+        } catch (err) {
+          console.warn('⚠️ Could not delete error log message:', err.message);
+        }
+      }, 30000);
+  
+      throw error;
+    }
   }
+
+  async viewPriceAlerts() {    
+    return await priceAlertService.viewAlerts();
+  }
+
+  /**
+   * Fetch a specific price alert by its ID.
+   * @param {string} alertId - The ID of the alert to fetch.
+   * @returns {Object} - The price alert details.
+   */
+  async getPriceAlert(alertId) {
+    try {
+      if (!alertId) {
+        throw new Error("Alert ID is required");
+      }
+
+      const alert = await priceAlertService.getAlertById(alertId);
+
+      if (!alert) {
+        throw new Error(`Alert with ID ${alertId} not found`);
+      }
+
+      return alert; // Return the full alert object
+    } catch (error) {
+      console.error("Error fetching price alert:", error.message);
+      throw error;
+    }
+  }
+
+  async editPriceAlert(alertId, updatedData) {
+    try {
+      if (!alertId) {
+        throw new Error("Alert ID is required");
+      }
+  
+      if (!updatedData || Object.keys(updatedData).length === 0) {
+        throw new Error("Updated data is required to edit the alert");
+      }
+  
+      const updatedAlert = await priceAlertService.editAlert(alertId, updatedData);
+  
+      if (!updatedAlert) {
+        throw new Error(`Alert with ID ${alertId} not found or could not be updated`);
+      }
+  
+      return updatedAlert; // Return the updated alert
+    } catch (error) {
+      console.error("Error editing price alert:", error.message);
+      throw error;
+    }
+  }  
+
+  /**
+   * Delete a specific price alert by its ID.
+   * @param {string} alertId - The ID of the alert to delete.
+   * @returns {Object} - Confirmation of the deletion.
+   */
+  async deletePriceAlert(alertId) {
+    try {
+      if (!alertId) {
+        throw new Error("Alert ID is required");
+      }
+
+      const result = await priceAlertService.deleteAlert(alertId);
+
+      if (!result.success) {
+        throw new Error(`Failed to delete alert with ID ${alertId}`);
+      }
+
+      return result; // Return success response with deleted alert ID
+    } catch (error) {
+      console.error("Error deleting price alert:", error.message);
+      throw error;
+    }
+  }
+
+  async getTokenNetwork(input) {
+    const solanaRegex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/; // Solana address regex
+    const evmRegex = /^0x[a-fA-F0-9]{40}$/; // EVM address regex
+
+    try {
+      // Step 1: Check if the input is a token address
+      if (solanaRegex.test(input)) {
+        console.log(`🔍 Detected Solana address: ${input}`);
+        const solanaToken = await this.dexscreener.getTokenInfoByAddress(input, 'solana');
+        if (solanaToken) {
+          return { network: 'solana', tokenInfo: solanaToken };
+        }
+      }
+
+      if (evmRegex.test(input)) {
+        console.log(`🔍 Detected EVM address: ${input}`);
+
+        // Query Ethereum
+        const ethereumToken = await this.dexscreener.getTokenInfoByAddress(input, 'ethereum').catch(() => null);
+        if (ethereumToken) {
+          return { network: 'ethereum', tokenInfo: ethereumToken };
+        }
+
+        // Query Base
+        const baseToken = await this.dexscreener.getTokenInfoByAddress(input, 'base').catch(() => null);
+        if (baseToken) {
+          return { network: 'base', tokenInfo: baseToken };
+        }
+      }
+
+      // Step 2: If it's not an address, treat it as a symbol
+      console.log(`🔍 Input is not a recognized address. Treating as symbol: ${input}`);
+      const tokenInfo = await this.getTokenInfoBySymbol(input);
+      if (tokenInfo && !tokenInfo.error) {
+        const network = this.determineNetworkForSymbol(tokenInfo);
+        if (network) {
+          console.log(`✅ Network determined for symbol: ${network}`);
+          return { network, tokenInfo };
+        }
+      }
+
+      console.warn(`❌ No token found for input: ${input}`);
+      return null;
+    } catch (error) {
+      console.error('❌ Error in getTokenNetwork:', error);
+      throw error;
+    }
+  } 
+  
+  determineNetworkForSymbol(tokenInfo) {
+    const networkHints = {
+      ethereum: ['eth', 'ethereum'],
+      base: ['base'],
+      solana: ['sol', 'solana'],
+    };
+  
+    const symbol = tokenInfo.symbol.toLowerCase();
+    for (const [network, hints] of Object.entries(networkHints)) {
+      if (hints.some((hint) => symbol.includes(hint) || tokenInfo.network?.toLowerCase() === network)) {
+        return network;
+      }
+    }
+  
+    console.warn('⚠️ Could not determine network for token symbol:', symbol);
+    return null;
+  }  
 
   async createTimedOrder(params, network) {
     return await timedOrderService.createOrder(params.userId, {
@@ -120,9 +361,42 @@ export class IntentProcessor extends EventEmitter {
     return await this.intentProcessHandler.handleTokenAddress(address, userId);
   }
 
-  async getTokenInfoBySymbol(text) {
-    return await this.dexscreener.getTokenInfoBySymbol(text);
-  }
+  async getTokenInfoBySymbol(symbol) {
+    try {
+      // Step 1: Try CoinGecko first
+      const coingeckoData = await this.getTokenInfoFromCoinGecko(symbol);
+      if (coingeckoData) {
+        console.log('✅ Token found on CoinGecko:', coingeckoData);
+        return coingeckoData;
+      }
+  
+      console.log('⚠️ Token not found on CoinGecko. Trying Dextools...');
+  
+      // Step 2: Fallback to Dextools
+      const dextoolsData = await this.dextools.getTokenInfo(symbol).catch(() => null);
+      if (dextoolsData) {
+        console.log('✅ Token found on Dextools:', dextoolsData);
+        return dextoolsData;
+      }
+  
+      console.log('⚠️ Token not found on Dextools. Trying DexScreener...');
+  
+      // Step 3: Fallback to DexScreener
+      const dexscreenerData = await this.dexscreener.getTokenInfo(symbol).catch(() => null);
+      if (dexscreenerData) {
+        console.log('✅ Token found on DexScreener:', dexscreenerData);
+        return dexscreenerData;
+      }
+  
+      // Step 4: All sources failed
+      console.log('❌ Token not found on any source.');
+      return { error: 'Failed to retrieve token data from CoinGecko, Dextools, and DexScreener.' };
+  
+    } catch (error) {
+      console.error('❌ Error in getTokenInfoBySymbol:', error);
+      return { error: 'An unexpected error occurred while retrieving token information.' };
+    }
+  }  
 
   async getTokenInfoByAddress(text) {
     return await this.dexscreener.getTokenInfoByAddress(text);
@@ -143,7 +417,7 @@ export class IntentProcessor extends EventEmitter {
   async getTrendingTokensDextools(network) {
     return await dextools.fetchTrendingTokens(network);
   }
-  
+
   async getTrendingTokensDexscreener() {
     return await trendingService.getBoostedTokens();
   }
@@ -163,7 +437,7 @@ export class IntentProcessor extends EventEmitter {
       if (!cleanCashtag) throw new Error('Cashtag cannot be empty');
   
       // Prepare and call the searchTweets function with filters
-      return await twitterService.searchTweets(userId, cleanCashtag, minLikes, minRetweets, minReplies);
+      return await twitterService.searchTweetsByCashtag(userId, cleanCashtag, minLikes, minRetweets, minReplies);
     } catch (error) {
       console.error(`❌ Error fetching tweets for cashtag "${cashtag}":`, error);
       throw error;
@@ -243,7 +517,6 @@ export class IntentProcessor extends EventEmitter {
     try {
       // Sanitize the input by trimming spaces and removing non-printable characters
       const sanitizedToken = token.trim().replace(/[\u0000-\u001F\u007F]/g, "");
-      console.warn("==================== Sanitized Input ==========>>", sanitizedToken);
   
       // Determine if input is a symbol or address
       const isAddress = /^[a-zA-Z0-9]{35,42}$/.test(sanitizedToken); // Solana/EVM addresses
@@ -292,7 +565,31 @@ export class IntentProcessor extends EventEmitter {
         return await this.getTokenInfoBySymbol(input);
       }
     }
-  }  
+  } 
+  
+  async startBitrefillShoppingFlow(chatId, email) {
+    
+    await this.bitrefillService.handleShoppingFlow(chatId, email),
+        
+    await this.bitrefillService.notifyPaymentStatus(chatId, invoiceId);
+  }
+
+  async bitRefillService(chatId) {
+    try {
+      // Simulate AI intent matching for simplicity
+      if (msg.text?.toLowerCase().includes("shop gift cards")) {
+        return await this.bitrefillService.handleShoppingFlow(chatId);
+      }
+
+      throw new Error("No matching intent found.");
+    } catch (error) {
+      console.error("❌ Error in processMessage:", error.message);
+      await this.bot.sendMessage(
+        chatId,
+        "❌ An error occurred while processing your request."
+      );
+    }
+  }
   
   extractFirstObject(data) {
     try {

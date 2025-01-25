@@ -8,7 +8,7 @@ export class AIContextManager extends EventEmitter {
     this.conversations = new Map(); // In-memory storage for active contexts
     this.contextCache = new Map(); // Cached summaries
     this.referenceMap = new Map(); // References for quick lookups
-    this.maxMessagesForAI = 10; // Limit in-memory context to 10 messages for AI
+    this.maxMessagesForAI = 6; // Limit in-memory context to 10 messages for AI
     this.initialized = false; // Initialization flag
   }
 
@@ -107,7 +107,7 @@ export class AIContextManager extends EventEmitter {
         content: this.cleanMessageContent(response),
         timestamp: new Date(),
       };
-      
+
       // Add new messages to the in-memory context
       const updatedContext = [...context, userMessage, assistantResponse];
 
@@ -162,7 +162,7 @@ export class AIContextManager extends EventEmitter {
    */
 
   async updateContextSummary(userId, context) {
-    console.warn('context to update with: ', context)
+    //console.warn('context to update with: ', context)
     this.contextCache.set(userId, {
       context,
       timestamp: Date.now()

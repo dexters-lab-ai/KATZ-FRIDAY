@@ -5,20 +5,19 @@ export class ErrorHandler {
   /**
    * Handles errors globally with optional user notification.
    * @param {Error} error - The error to handle.
-   * @param {Object|null} bot - (Optional) Telegram bot instance for user notification.
-   * @param {number|null} chatId - (Optional) Chat ID for user notification.
+   * @param {Object|null} ctx - (Optional) Telegraf context for user notification.
    * @returns {Promise<Object>} - Details of the handled error.
    */
-  static async handle(error, bot = null, chatId = null) {
+  static async handle(error, ctx = null) {
     console.error('❌ Error occurred:', error);
 
     // Determine error type and map to a user-friendly message
     const errorMessages = this._getErrorMessages();
     const message = errorMessages[error.type] || errorMessages['DEFAULT'];
 
-    // Notify the user if bot and chatId are available
-    if (bot && chatId) {
-      //await this._notifyUser(bot, chatId, message);
+    // Notify the user if context is available
+    if (ctx) {
+      await this._notifyUser(ctx, message);
     }
 
     // Log error for monitoring purposes
@@ -32,7 +31,7 @@ export class ErrorHandler {
       console.error('📚 Handling AggregateError with multiple sub-errors');
       for (const subError of error.errors) {
         console.error('Sub-error:', subError);
-        await this.handle(subError, bot, chatId); // Recursive handling of sub-errors
+        await this.handle(subError, ctx); // Recursive handling of sub-errors
       }
     } else {
       console.warn('Non-critical error handled:', error.message);
@@ -61,13 +60,12 @@ export class ErrorHandler {
 
   /**
    * Notify a user in the Telegram chat with an error message.
-   * @param {Object} bot - The Telegram bot instance.
-   * @param {number} chatId - The chat ID to send the message.
+   * @param {Object} ctx - The Telegraf context.
    * @param {string} message - The message to send.
    */
-  static async _notifyUser(bot, chatId, message) {
+  static async _notifyUser(ctx, message) {
     try {
-      await bot.sendMessage(chatId, message, {
+      await ctx.reply(message, {
         reply_markup: {
           inline_keyboard: [[
             { text: '🔄 Retry', callback_data: 'retry_action' },
@@ -88,7 +86,6 @@ export class ErrorHandler {
     console.error('🔧 Handling critical error:', error);
 
     // Restart or notify admin logic here
-    // Example: healthMonitor.notifyAdmins(error);
     healthMonitor.logCriticalError(error);
 
     // Consider shutting down or restarting specific services
@@ -103,8 +100,6 @@ export class ErrorHandler {
     process.on('uncaughtException', async (error) => {
       console.error('❌ Uncaught Exception:', error);
       await ErrorHandler.handle(error);
-      // Optionally, decide whether to exit the process for unrecoverable errors
-      // process.exit(1);
     });
 
     process.on('unhandledRejection', async (reason) => {
@@ -117,13 +112,14 @@ export class ErrorHandler {
 /**
  * Utility function to safely execute async functions with centralized error handling.
  * @param {Function} fn - The async function to execute.
+ * @param {Object|null} ctx - (Optional) Telegraf context for error handling.
  * @param {...any} args - Arguments to pass to the function.
  */
-export async function safeExecute(fn, ...args) {
+export async function safeExecute(fn, ctx = null, ...args) {
   try {
     return await fn(...args);
   } catch (error) {
-    await ErrorHandler.handle(error);
+    await ErrorHandler.handle(error, ctx);
     console.error('Error during execution:', error);
     return null; // Return a fallback value or null
   }

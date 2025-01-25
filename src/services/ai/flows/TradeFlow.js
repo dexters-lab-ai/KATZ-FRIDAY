@@ -254,84 +254,94 @@ export class TradeFlow extends BaseFlow {
     }
   }
 
-  async processTokenStep(input, state) {
+  async processTokenStep(ctx, input, state) {
     try {
-      // If we already have token info from natural language parsing
+      // If token info is already available from natural language parsing
       if (state.token) {
+        await ctx.reply(
+          `Great! How much ${state.token.symbol} would you like to trade?`
+        );
         return {
           completed: false,
           flowData: {
             ...state,
-            currentStep: 1
+            currentStep: 1,
           },
-          response: `Great! How much ${state.token.symbol} would you like to trade?`
         };
       }
-
-      // Otherwise validate manual token input
-      const network = await networkState.getCurrentNetwork(state.userId);
+  
+      // Validate manual token input
+      const network = await networkState.getCurrentNetwork(ctx.from.id);
       const tokenInfo = await tokenInfoService.validateToken(network, input);
-      
+  
+      await ctx.reply(
+        `Great! How much ${tokenInfo.symbol} would you like to trade?`
+      );
+  
       return {
         completed: false,
         flowData: {
           ...state,
           currentStep: 1,
-          token: tokenInfo
+          token: tokenInfo,
         },
-        response: `Great! How much ${tokenInfo.symbol} would you like to trade?`
       };
     } catch (error) {
+      await ctx.reply(
+        'Invalid token. Please provide a valid token address or symbol:',
+        {
+          reply_markup: {
+            inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'cancel_trade' }]],
+          },
+        }
+      );
+  
       return {
         completed: false,
         flowData: state,
-        response: 'Invalid token. Please provide a valid token address or symbol:',
-        keyboard: {
-          inline_keyboard: [[
-            { text: '❌ Cancel', callback_data: 'cancel_trade' }
-          ]]
-        }
       };
     }
   }
-
-  async processAmountStep(input, state) {
-    // If we already have amount from natural language parsing
+  
+  async processAmountStep(ctx, input, state) {
+    // If amount is already available from natural language parsing
     if (state.amount) {
+      await ctx.reply(this.formatConfirmation(state));
       return {
         completed: false,
         flowData: {
           ...state,
-          currentStep: 2
+          currentStep: 2,
         },
-        response: this.formatConfirmation(state)
       };
     }
-
+  
     const amount = parseFloat(input);
+  
     if (isNaN(amount) || amount <= 0) {
+      await ctx.reply('Invalid amount. Please enter a valid number:', {
+        reply_markup: {
+          inline_keyboard: [[{ text: '❌ Cancel', callback_data: 'cancel_trade' }]],
+        },
+      });
+  
       return {
         completed: false,
         flowData: state,
-        response: 'Invalid amount. Please enter a valid number:',
-        keyboard: {
-          inline_keyboard: [[
-            { text: '❌ Cancel', callback_data: 'cancel_trade' }
-          ]]
-        }
       };
     }
-
+  
+    await ctx.reply(this.formatConfirmation({ ...state, amount }));
+  
     return {
       completed: false,
       flowData: {
         ...state,
         currentStep: 2,
-        amount
+        amount,
       },
-      response: this.formatConfirmation({ ...state, amount })
     };
-  }
+  }  
 
   formatConfirmation(state) {
     const { action, amount, token, unit } = state;

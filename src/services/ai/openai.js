@@ -46,7 +46,7 @@ class OpenAIService {
         await this.testConnection();
       }
       
-    console.log('createChatCompletion: cleaned context input to AI Model: ', messages)
+    // console.log('createChatCompletion: cleaned context input to AI Model: ', messages)
 
       const response = await this.openai.chat.completions.create({
         model,

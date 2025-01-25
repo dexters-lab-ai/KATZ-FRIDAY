@@ -1,6 +1,7 @@
 import { ErrorHandler } from '../../../core/errors/index.js';
 import { walletService } from '../../../services/wallet/index.js';
 import { networkState } from '../../../services/networkState.js';
+import { Markup } from 'telegraf';
 
 export class WalletCreationHandler {
   constructor(bot) {
@@ -16,27 +17,25 @@ export class WalletCreationHandler {
       const networks = ['ethereum', 'base', 'solana'];
 
       // Build inline keyboard for network selection
-      const keyboard = {
-        inline_keyboard: [
-          ...networks.map(network => [
-            {
-              text: network === currentNetwork
-                ? `${networkState.getNetworkDisplay(network)} ✓`
-                : networkState.getNetworkDisplay(network),
-              callback_data: `select_network_${network}`
-            }
-          ]),
-          [{ text: '↩️ Back', callback_data: 'back_to_wallets' }]
-        ]
-      };
+      const keyboard = Markup.inlineKeyboard([
+        ...networks.map((network) =>
+          Markup.button.callback(
+            network === currentNetwork
+              ? `${networkState.getNetworkDisplay(network)} ✓`
+              : networkState.getNetworkDisplay(network),
+            `select_network_${network}`
+          )
+        ),
+        [Markup.button.callback('↩️ Back', 'back_to_wallets')],
+      ]);
 
       // Send network selection message
-      await this.bot.sendMessage(
+      await this.bot.telegram.sendMessage(
         chatId,
         '*Select Network* 🌐\n\nChoose the network for your new wallet:',
         {
           parse_mode: 'Markdown',
-          reply_markup: keyboard
+          reply_markup: keyboard,
         }
       );
 
@@ -59,24 +58,24 @@ export class WalletCreationHandler {
       const wallet = await walletService.createWallet(userInfo.id, network);
 
       // Remove loading message
-      await this.bot.deleteMessage(chatId, loadingMsg.message_id);
+      await this.bot.telegram.deleteMessage(chatId, loadingMsg.message_id);
 
       // Success message with navigation options
-      await this.bot.sendMessage(
+      const keyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback('👛 View Wallets', 'view_wallets'),
+          Markup.button.callback('↩️ Back', 'back_to_wallets'),
+        ],
+      ]);
+
+      await this.bot.telegram.sendMessage(
         chatId,
         `✅ Wallet created successfully!\n\n` +
           `*Network:* ${networkState.getNetworkDisplay(network)}\n` +
           `*Address:* \`${wallet.address}\``,
         {
           parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '👛 View Wallets', callback_data: 'view_wallets' },
-                { text: '↩️ Back', callback_data: 'back_to_wallets' }
-              ]
-            ]
-          }
+          reply_markup: keyboard,
         }
       );
 
@@ -85,22 +84,22 @@ export class WalletCreationHandler {
       console.error('Error creating wallet:', error);
 
       if (loadingMsg) {
-        await this.bot.deleteMessage(chatId, loadingMsg.message_id);
+        await this.bot.telegram.deleteMessage(chatId, loadingMsg.message_id);
       }
 
       // Handle error gracefully with retry option
-      await this.bot.sendMessage(
+      const keyboard = Markup.inlineKeyboard([
+        [
+          Markup.button.callback('🔄 Retry', `select_network_${network}`),
+          Markup.button.callback('↩️ Back', 'back_to_wallets'),
+        ],
+      ]);
+
+      await this.bot.telegram.sendMessage(
         chatId,
         '❌ Failed to create wallet. Please try again.',
         {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                { text: '🔄 Retry', callback_data: `select_network_${network}` },
-                { text: '↩️ Back', callback_data: 'back_to_wallets' }
-              ]
-            ]
-          }
+          reply_markup: keyboard,
         }
       );
 

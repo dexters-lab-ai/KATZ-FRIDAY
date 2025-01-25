@@ -54,74 +54,70 @@ export class UnifiedMessageHandler extends EventEmitter {
 
   async handleMessage(msg) {
     try {
-      let userInput = msg.text;
+        let userInput = msg.text;
 
-      // Handle voice messages
-      if (msg.voice) {
-        const fileId = msg.voice.file_id;
-        const fileUrl = await this.bot.getFileLink(fileId);
-        userInput = await voiceService.transcribeVoice(fileUrl); // Transcribe the voice message
-        console.log("🎙️ Transcribed Input:", userInput);
-      }
-
-      if (!userInput) return;
-
-      // Check for command matches
-      const command = this.commandRegistry.findCommand(userInput);
-      if (command) {
-        await command.execute(msg);
-        return;
-      }
-
-      // Notify the user that processing has started
-      const processingMessage = await this.bot.sendMessage(
-        msg.chat.id,
-        `🚀 *KATZ! is processing, please wait...*`,
-        { parse_mode: "Markdown" }
-      );
-
-      // Process the message through the autonomous processor      
-      const result = await this.autonomousProcessor.processMessage(msg, msg.from.id);
-
-      // Notify user of processing completion
-      await this.bot.editMessageText("✅ Processing complete!", {
-        chat_id: msg.chat.id,
-        message_id: processingMessage.message_id,
-      });
-
-      // Send the final result as a text message
-      await this.bot.sendMessage(msg.chat.id, result.text, { parse_mode: "Markdown" });
-
-      // Synthesize and send voice response only for valid responses
-      /*
-      if (result.text && result.text.trim()) {
-        try {
-          const voiceResponse = await voiceService.synthesizeSpeech(result.text);
-          await this.bot.sendVoice(msg.chat.id, voiceResponse);
-        } catch (error) {
-          console.error("❌ Error synthesizing voice response:", error.message);
+        if (msg.voice) {
+            const fileId = msg.voice.file_id;
+            const fileUrl = await this.bot.getFileLink(fileId);
+            userInput = await voiceService.transcribeVoice(fileUrl);
         }
-      }
-        */
 
-      // Update Context
-      await this.contextManager.updateContext(msg.from.id, msg, result.text);
+        if (!userInput) return;
 
+        const command = this.commandRegistry.findCommand(userInput);
+        if (command) {
+            await command.execute(msg);
+            return;
+        }
+
+        const processingMessage = await this.bot.sendMessage(
+            msg.chat.id,
+            `🚀 *KATZ! is processing, please wait...*`,
+            { parse_mode: "Markdown" }
+        );
+
+        const result = await this.autonomousProcessor.processMessage(msg, msg.from.id);
+
+        await this.bot.editMessageText("✅ Processing complete!", {
+            chat_id: msg.chat.id,
+            message_id: processingMessage.message_id,
+        });
+
+        const finalText = result?.text && result.text.trim()
+            ? result.text
+            : "⚠️ Unable to process your request.";
+        
+        await this.sendMessageWithLimit(msg.chat.id, finalText, "Markdown");
+
+        await this.contextManager.updateContext(msg.from.id, msg, finalText);
     } catch (error) {
-      console.error("❌ Error in handleMessage:", {
-        message: error.message,
-        stack: error.stack,
-        rawError: error,
-      });
-      // Handle any errors gracefully and notify the user
-      await this.bot.sendMessage(
-        msg.chat.id,
-        `❌ *An error occurred:* ${error.message}`,
-        { parse_mode: "Markdown" }
-      );
-      console.error("Error in handleMessage:", error.message);
+        console.error("❌ Error in handleMessage:", error);
+        await this.sendMessageWithLimit(msg.chat.id, `❌ *An error occurred:* ${error.message}`, "Markdown");
+    }
+}
+
+  
+  // Function to handle long messages
+  async sendMessageWithLimit(chatId, message, parseMode = "Markdown") {
+    try {
+      const MAX_LENGTH = 4096; // Telegram's message character limit
+  
+      // Split message into chunks if it exceeds the limit
+      if (message.length > MAX_LENGTH) {
+        const chunks = message.match(new RegExp(`.{1,${MAX_LENGTH}}`, 'g'));
+        for (const chunk of chunks) {
+          await this.bot.sendMessage(chatId, chunk, { parse_mode: parseMode });
+        }
+      } else {
+        // Send message as a single block
+        await this.bot.sendMessage(chatId, message, { parse_mode: parseMode });
+      }
+    } catch (error) {
+      console.error("❌ Error in sendMessageWithLimit:", error.message);
+      throw error;
     }
   }
+  
 
   async handleCallback(query) {
     try {
