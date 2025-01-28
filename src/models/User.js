@@ -32,6 +32,38 @@ const WalletSchema = new mongoose.Schema({
   }
 });
 
+// NEW: Sub-schema for bridging records
+const BridgingRecordSchema = new mongoose.Schema({
+  bridgingId: {
+    type: String,
+    required: true,
+    index: true // So we can query by bridgingId if needed
+  },
+  sourceChain: { type: String, required: true },
+  targetChain: { type: String, required: true },
+  tokenSymbol: { type: String, required: true },
+  amount: { type: String, required: true },
+  routeUsed: { type: String }, // e.g. "AutomaticTokenBridgeRoute"
+  txReceipt: { type: mongoose.Schema.Types.Mixed }, // store final receipt object
+  status: {
+    type: String,
+    enum: ["PENDING", "COMPLETED", "FAILED"],
+    default: "PENDING"
+  },
+  logs: [
+    {
+      type: String
+    }
+  ],
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  completedAt: {
+    type: Date
+  }
+});
+
 // Main User Schema
 const UserSchema = new mongoose.Schema({
   telegramId: {
@@ -44,6 +76,11 @@ const UserSchema = new mongoose.Schema({
     ethereum: [WalletSchema],
     base: [WalletSchema],
     solana: [WalletSchema]
+  },
+  // NEW: bridgingRecords array
+  bridgingRecords: {
+    type: [BridgingRecordSchema],
+    default: []
   },
   settings: {
     defaultNetwork: {
@@ -255,6 +292,51 @@ UserSchema.methods = {
       this.settings.trading.autonomousEnabled = settings.autonomousEnabled;
     }
     return await this.save();
+  },
+
+  // Saves a new bridging request to this user's record
+  async addBridgingRecord(record) {
+    // record should be an object matching BridgingRecordSchema fields
+    this.bridgingRecords.push(record);
+    await this.save();
+    return record;
+  },
+
+  // updateBridgingRecord
+  async updateBridgingRecord(bridgingId, updates) {
+    const idx = this.bridgingRecords.findIndex(r => r.bridgingId === bridgingId);
+    if (idx < 0) {
+      throw new Error(`Bridging record '${bridgingId}' not found for user ${this.telegramId}`);
+    }
+
+    // Merge updates
+    Object.assign(this.bridgingRecords[idx], updates);
+
+    // If status is completed or failed, set completedAt
+    if (updates.status && ["COMPLETED", "FAILED"].includes(updates.status)) {
+      this.bridgingRecords[idx].completedAt = new Date();
+    }
+
+    await this.save();
+    return this.bridgingRecords[idx];
+  },
+
+  // Appends a log line to bridgingRecord's logs array
+  async addBridgingLog(bridgingId, logMessage) {
+    const idx = this.bridgingRecords.findIndex(r => r.bridgingId === bridgingId);
+    if (idx < 0) {
+      throw new Error(`Bridging record '${bridgingId}' not found for user ${this.telegramId}`);
+    }
+    this.bridgingRecords[idx].logs.push(logMessage);
+    await this.save();
+  },
+
+  // Return bridging records, optionally limit or filter
+  getBridgingRecords(limit = 10) {
+    // e.g. return last 10 bridging records
+    return this.bridgingRecords
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, limit);
   }
 };
 
@@ -277,6 +359,15 @@ UserSchema.statics = {
     return await this.find({
       [`wallets.${network}`]: { $exists: true, $ne: [] }
     }).exec();
+  },
+
+  // Shortcut to load user by telegramId & return bridgingRecords
+  async fetchUserBridgingRecords(telegramId, limit = 10) {
+    const user = await this.findOne({ telegramId }).exec();
+    if (!user) {
+      throw new Error(`User not found with telegramId: ${telegramId}`);
+    }
+    return user.getBridgingRecords(limit);
   }
 };
 

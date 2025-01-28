@@ -10,6 +10,8 @@ import { IntentProcessor } from './IntentProcessor.js';
 import { aiMetricsService } from '../../aiMetricsService.js';
 import { contextManager } from '../ContextManager.js';
 import BitrefillService from "../../bitrefill/BitrefillService.js";
+import WormholeBridgeService from '../../Wormhole/WormholeBridgeService.js';
+import { fallbackMap } from './Fallbacks.js';
 
 export class UnifiedAutonomousProcessor extends EventEmitter {
   constructor(bot) {
@@ -18,6 +20,7 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
     this.initialized = false;
     this.contextManager = contextManager;
     this.metrics = aiMetricsService;
+    this.bridgeService = new WormholeBridgeService();
     this.bitrefillService = new BitrefillService(bot);
     this.intentProcessor = new IntentProcessor(bot);
 
@@ -37,6 +40,7 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
 
   async initialize() {
     try {
+      await this.bridgeService.initialize();
       await this.contextManager.initialize();
       await this.metrics.initialize();
       console.log("✅ UnifiedMessageProcessor initialized");
@@ -96,7 +100,6 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
             : args[key];
       }
     });
-
     return args;
   }
 
@@ -163,14 +166,17 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
         {
           role: "system",
           content: `
-          You are F.R.I.D.A.Y from the Iron Man movies, an advanced AI assistant.
-          Act and talk exactly like her. Summarize results clearly and always
-          suggest follow-up steps based on user queries.
+          You are a cartoon Genie - based on the cartoon character Aladdin.
+          - Maintain a concise, cheeky, clever, slang infused, witty, and dry humorous tone.
+          - Give short snappy replies only if function trigger for a task is involved.
 
           Your Operation Guide:
           - Always be aware of all functions you have and save all token key infor like linkes, addresses, coingecko id, symbol, blockchain asociated in results
           - Prioritize detail richness over summarizing results, less talk, more focus on data.
-          - Execute multi-step tasks seamlessly based on user inputs.
+          - Execute multi-step tasks seamlessly based on user inputs. 
+          - Prioritize triggering multiple functions if the complex User prompt has no tasks dependent on other task results.          
+          - Avoid assumptions about ambiguous sensitive user requests—ask for clarification.
+          - When preparing transactions use blockchain unit for example 1 SOL is 1000000 lamports when preparing a swap transaction or solana payment.
            - Format responses for clear fancy one pointers.
            - Present all Token Addresses & Symbols as clickable links in final output, 
              - Prioritize token links; address, website, dex links, coingecko link, intel/.arkm link, solscan link, etherscan link, basescan link when available.
@@ -180,12 +186,15 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
              - SPL addresses Solana: https://dexscreener.com/solana/{tokenAddress}
              - 0x addresses Ethereum: https://dextools.com/ethereum/{tokenAddress}
              - 0x addresses Base Chain: https://dextools.com/base/{tokenAddress}
-             - Always check if address & network string combination in url makes sense, solana address like EkVYMGeh... cant be a Ethereum or Base address prefixed with 0x...
+             - Always check if address & network string combination in url makes sense, solana address like "EkVYMGeh..." cant be a Ethereum or Base address which looks like "0xB25sf..."
              - If platform.arkhamintelligence.com and ethplorer.io links exist use them instead of Dexscreener.
-           - Avoid assumptions about ambiguous user requests—ask for clarification.
-           - Maintain a concise, witty, and humorous tone. Never long sentences.
+           - Token Addresses are formatted as follows:
+             - Ethereum > https://etherscan.io/token/0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48
+             - Base > https://basescan.io/token/0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48
+             - Solana > https://solscan.io/token/6p6xgHyF7AeE6TZkSmFsko444wqoP15icUSqi2jfGiPN
            - Present task results, like a robot tasked and reporting back.
            - Dont give disclaimers.
+           - Suggest other alternative methods routes to results, for example if a price check fails, suggest logical functions avalibale like internet_seacrh.
            - Suggest next action based on logic of steps taken by user.
         `,
         },
@@ -223,13 +232,8 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
 
       // Normal assistant text response
       const assistantResponse = message?.content || "⚠️ Unable to process your request.";
-      return {
-        text: this.escapeMarkdown(
-          assistantResponse.length > 3000
-            ? `${assistantResponse.slice(0, 3000)}...`
-            : assistantResponse
-        ),
-      };
+
+      return { text: assistantResponse };
     } catch (error) {
       console.error("❌ Error in processMessage:", {
         message: error.message,
@@ -340,7 +344,7 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
    */
   requiresConfirmation(functionName) {
     const sensitiveFunctions = [
-      "execute_trade",
+      "execute_solana_swap",
       "create_price_alert",
       "create_timed_order",
       "approve_token",
@@ -398,21 +402,21 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
     }
   }
 
-/***
-+   * executeMultiStepTask
-+   * --------------------
-+   * Splits a complex task into sub-tasks, handles dependencies in the correct order,
-+   * retries each step 3 times for recoverable errors, and continues even on failure.
-+   */
+  /***
+  +   * executeMultiStepTask
+  +   * --------------------
+  +   * Splits a complex task into sub-tasks, handles dependencies in the correct order,
+  +   * retries each step 3 times for recoverable errors, and continues even on failure.
+  +   */
   async executeMultiStepTask(initialFunctionCall, messages, userId, msg) {
     const results = new Map(); // Cache of results from each step
 
     // Build a "taskTree" from the initial call + potential template
     const taskTree = this.buildTaskTree(null, initialFunctionCall);
 
-    /**
-     * Recursively executes a task and all its dependencies in order.
-     */
+    // --------------------------------------------------
+    // Inner function that runs a single task
+    // --------------------------------------------------
     const executeTask = async (task) => {
       // 1) Resolve dependencies first
       if (task.dependencies && task.dependencies.length > 0) {
@@ -420,7 +424,7 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
           const dependency = taskTree.find((t) => t.name === dependencyName);
           if (!dependency) {
             console.warn(`❌ Dependency '${dependencyName}' for task '${task.name}' not found. Skipping.`);
-            continue; // Or throw if you want strict enforcement
+            continue; 
           }
           if (!results.has(dependencyName)) {
             await executeTask(dependency);
@@ -450,8 +454,15 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
           parsedArguments,
           userId,
           msg.chat.id,
-          /* maxRetries=3 */
+          3
         );
+
+        // NEW: Notify user success at the end of the step
+        await this.bot.sendMessage(
+          msg.chat.id,
+          `✅ Task '${task.name}' completed with result:\n${JSON.stringify(stepResult, null, 2)}`
+        );
+
       } catch (error) {
         // After exhausting retries or a non-recoverable error
         console.error(`❌ Final failure in task '${task.name}':`, {
@@ -465,6 +476,12 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
           errorMessage: error.message,
           stack: error.stack,
         };
+
+        // NEW: Notify user this step failed but we are continuing
+        await this.bot.sendMessage(
+          msg.chat.id,
+          `❌ Task '${task.name}' failed. Error: ${error.message}\nContinuing to next task...`
+        );
       }
 
       // 5) Store the result in our `results` map
@@ -481,7 +498,6 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
       // 7) Possibly trigger a follow-up from GPT (e.g., next function call)
       const followUpResponse = await this.getFunctionResponse(messages, task.name, stepResult);
       if (followUpResponse?.nextFunction) {
-        // Dynamically append to the task tree
         const followUpTask = {
           name: followUpResponse.nextFunction.name,
           dependencies: [task.name],
@@ -491,7 +507,9 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
       }
     };
 
-    // Execute tasks in the order they appear (and handle dependencies recursively)
+    // --------------------------------------------------
+    // Iterate over tasks in the tree
+    // --------------------------------------------------
     for (const task of taskTree) {
       if (!results.has(task.name)) {
         await executeTask(task);
@@ -501,46 +519,113 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
     // Summarize final results
     const summary = this.formatResults([...results.values()]);
     return { text: summary };
-  } // END executeMultiStepTask
+  }
 
-/***
-+   * executeFunctionWithLimitedRetry
-+   * -------------------------------
-+   * Similar to `executeFunctionWithRetry`, but:
-+   * - Retries up to `maxRetries` times on network (recoverable) errors.
-+   * - If all attempts fail, it throws the error upward.
-+   * - We handle the “move on to next task” logic outside (in `executeMultiStepTask`).
-+   */
-  async executeFunctionWithLimitedRetry(
-    name,
-    args,
-    userId,
-    chatId,
-    maxRetries = 3
-  ) {
-    let attempts = 0;
-    while (attempts < maxRetries) {
-      try {
-        // Actually execute the intended function
-        const result = await this.executeFunction(name, args, userId, chatId);
-        return result;
-      } catch (error) {
-        attempts++;
-        console.warn(`⚠️ Attempt ${attempts} for function '${name}' failed:`, {
-          message: error.message,
-          stack: error.stack,
-        });
+    /**
+     * tryFallbackFunctions
+     * --------------------
+     * 1) Looks up fallbackMap for the given function name.
+     * 2) Tries each fallback in order with short limited retry.
+     * 3) If all fail, we throw.
+     */
+    async tryFallbackFunctions(name, args, userId, chatId, originalError) {
+      const fallbacks = fallbackMap[name] || [];
+      if (!fallbacks.length) {
+        // No fallback => rethrow the original error
+        console.error(`❌ No fallback defined for '${name}'. Failing step.`);
+        throw originalError;
+      }
 
-        // 1) If error is NOT recoverable, no point in retrying
-        if (!this.isRecoverableError(error)) {
-          // Forward it to the caller for handling
-          throw error;
+      for (const fallbackName of fallbacks) {
+        console.log(`⚠️ Attempting fallback '${fallbackName}' for '${name}'...`);
+        try {
+          // Possibly do short retry for fallback if it's also sensitive or likely to fail
+          return await this.executeFunctionWithLimitedRetrySingleAttempt(
+            fallbackName,
+            args,
+            userId,
+            chatId
+          );
+        } catch (err) {
+          console.warn(`⚠️ Fallback '${fallbackName}' failed: ${err.message}`);
+          // Move to the next fallback in the array
         }
+      }
 
-        // 2) If we still have attempts left, ask user for confirmation again if needed
-        if (attempts < maxRetries) {
-          await this.bot.sendMessage(chatId, `Retrying '${name}' (attempt #${attempts + 1})...`);
-          // Optionally, re-confirm with user for especially sensitive tasks:
+      // All fallbacks failed
+      throw new Error(
+        `❌ All fallback functions for '${name}' have failed. Original error: ${originalError.message}`
+      );
+    }
+
+    /**
+     * executeFunctionWithLimitedRetry
+     * -------------------------------
+     * 1) Tries the main function up to `maxRetries` times if errors are recoverable.
+     * 2) For each attempt, if function is "sensitive", reconfirm with user before retrying.
+     * 3) If all retries fail or error is non-recoverable, we try fallback(s).
+     * 4) If fallbacks also fail, we throw.
+     * Extended to:
+     * 1) Retry on recoverable errors
+     * 2) Attempt fallback if non-recoverable or max retries reached
+     * 3) Skip normal retries (and jump to fallback) if data is incomplete 
+     *    (i.e., the function returned an "insufficient" result).
+    */
+    async executeFunctionWithLimitedRetry(name, args, userId, chatId, maxRetries = 3) {
+      let attempts = 0;
+      while (attempts < maxRetries) {
+        try {
+          // Attempt the main function call
+          const result = await this.executeFunction(name, args, userId, chatId);
+  
+          // Check if the result is insufficient
+          if (this.isDataInsufficient(result)) {
+            console.warn(`⚠️ Function '${name}' returned insufficient data on attempt #${attempts + 1}`);
+            attempts++;
+  
+            if (attempts < maxRetries) {
+              // NEW: update user on partial re-attempt
+              await this.bot.sendMessage(
+                chatId,
+                `⚠️ Task '${name}' returned incomplete data. Retrying (attempt #${attempts + 1})...`
+              );
+  
+              if (this.requiresConfirmation(name)) {
+                const userConfirmed = await this.askForConfirmation(
+                  { chat: { id: chatId } },
+                  name,
+                  JSON.stringify(args)
+                );
+                if (!userConfirmed) {
+                  throw new Error(`User canceled retry for '${name}'.`);
+                }
+              }
+              continue;
+            } else {
+              // Fallback
+              console.warn(`⚠️ No more retries left for '${name}'. Checking fallback...`);
+              return await this.tryFallbackFunctions(name, args, userId, chatId, new Error("Insufficient data"));
+            }
+          }
+  
+          // If we get here => result is valid
+          return result;
+  
+        } catch (error) {
+          attempts++;
+          console.warn(`⚠️ Attempt ${attempts} for function '${name}' failed: ${error.message}`);
+  
+          if (!this.isRecoverableError(error) || attempts >= maxRetries) {
+            console.warn(`⚠️ No more standard retries for '${name}'. Checking fallback...`);
+            return await this.tryFallbackFunctions(name, args, userId, chatId, error);
+          }
+  
+          // continue normal retry attempts
+          await this.bot.sendMessage(
+            chatId,
+            `Retrying '${name}' (attempt #${attempts + 1}) due to error: ${error.message}`
+          );
+  
           if (this.requiresConfirmation(name)) {
             const userConfirmed = await this.askForConfirmation(
               { chat: { id: chatId } },
@@ -551,171 +636,217 @@ export class UnifiedAutonomousProcessor extends EventEmitter {
               throw new Error(`User canceled retry for '${name}'.`);
             }
           }
-        } else {
-          // 3) If we've reached max retries => throw to let the caller handle
-          throw error;
         }
       }
     }
-  } // END executeFunctionWithLimitedRetry
 
-  /**
-   * executeFunction
-   * ---------------
-   * Maps the AI function name to a method in your IntentProcessor or other modules.
+    /**
+   * executeFunctionWithLimitedRetrySingleAttempt
+   * --------------------------------------------
+   * A simpler fallback method: tries once or twice if recoverable.
+   * Also includes user confirmation if the fallback is "sensitive."
    */
-  async executeFunction(name, args, userId, chatId) {
-    try {
-      // Map function calls to actual method implementations
-      const functionMap = {
-        approve_token: () => this.intentProcessor.handleTokenApproval(args),
-        revoke_token_approval: () => this.intentProcessor.handleTokenRevocation(args),
-        create_solana_payment: () => this.intentProcessor.createSolanaPayment(args),
-        get_market_conditions: () => this.intentProcessor.getMarketConditions(),
-        fetch_market_categories: () => this.intentProcessor.getMarketCategories(),
-        fetch_market_category_metrics: () => this.intentProcessor.getMarketCategoryMetrics(),
-        fetch_coins_by_category: () => this.intentProcessor.getCoinsByCategory(args.categoryId),
-        handle_product_reference: () => this.intentProcessor.handleProductReference(args.userId, args.productId),
-        execute_trade: () => this.intentProcessor.swapTokens(args, args.network),
-        handle_address_input: () => this.intentProcessor.handleAddressPaste(args.address, userId),
-        analyze_token_by_symbol: () => this.intentProcessor.getTokenInfoBySymbol(args.tokenSymbol),
-        analyze_token_by_address: () => this.intentProcessor.getTokenInfoByAddress(args.tokenAddress),
-        fetch_trending_tokens_unified: () => this.intentProcessor.getTrendingTokens(),
-        fetch_trending_tokens_by_chain: () => this.intentProcessor.getTrendingTokensByChain(args.network),
-        fetch_trending_tokens_coingecko: () => this.intentProcessor.getTrendingTokensCoinGecko(),
-        fetch_trending_tokens_dextools: () => this.intentProcessor.getTrendingTokensDextools(args.network),
-        fetch_trending_tokens_dexscreener: () => this.intentProcessor.getTrendingTokensDexscreener(),
-        fetch_trending_tokens_twitter: () => this.intentProcessor.getTrendingTokensTwitter(),
-        fetch_trending_tokens_solscan:()=> this.intentProcessor.getTrendingTokensSolscan(),
-        create_price_alert: () => this.intentProcessor.createPriceAlert(userId, chatId, args),
-        view_price_alerts: () => this.intentProcessor.viewPriceAlerts(),
-        edit_price_alert: () => this.intentProcessor.editPriceAlert(args.alertId),
-        view_price_alert: () => this.intentProcessor.getPriceAlert(args.alertId),
-        delete_price_alert: () => this.intentProcessor.deletePriceAlert(args.alertId),
-        create_timed_order: () => this.intentProcessor.createTimedOrder(args),
-        get_portfolio: () => this.intentProcessor.getPortfolio(userId, args.network),
-        get_trade_history: () => this.intentProcessor.getTradeHistory(userId),
-        fetch_flipper_mode_metrics: () => this.intentProcessor.fetchMetrics(),
-        setup_flipper_mode: () => this.intentProcessor.setupFlipperMode(userId),
-        start_flipper_mode: () => this.intentProcessor.startFlipperMode(userId, args),
-        stop_flipper_mode: () => this.intentProcessor.stopFlipperMode(this.bot, userId),
-        monitor_kol: () => this.intentProcessor.startKOLMonitoring(userId, args.query),
-        stop_monitor_kol: () => this.intentProcessor.stopKOLMonitoring(userId, args.handle),
-        search_products: () => this.intentProcessor.handleShopifySearch(args.query),
-        fetch_tweets_for_symbol: () => {
-          const { cashtag, minLikes = 0, minRetweets = 0, minReplies = 0 } = args;
-          return this.intentProcessor.search_tweets_for_cashtag(
+    async executeFunctionWithLimitedRetrySingleAttempt(
+      fallbackName,
+      args,
+      userId,
+      chatId,
+      maxFallbackRetries = 2
+    ) {
+      let attempts = 0;
+      while (attempts < maxFallbackRetries) {
+        try {
+          const result = await this.executeFunction(
+            fallbackName,
+            args,
             userId,
-            cashtag,
-            minLikes,
-            minRetweets,
-            minReplies
+            chatId
           );
-        },
-        search_internet: () => this.intentProcessor.performInternetSearch(args.query),
-        token_price_dexscreener: () => this.intentProcessor.performTokenPriceCheck(args.query),
-        token_price_coingecko: () => this.intentProcessor.getTokenInfoFromCoinGecko(args.query),
-        set_reminder: () => this.intentProcessor.saveButlerReminderEmails(userId, args),
-        start_monitoring_reminders: () => this.intentProcessor.monitorButlerReminderEmails(userId, args.text),
-        generate_google_report: () => this.intentProcessor.generateGoogleReport(userId),
-        save_strategy: () => this.intentProcessor.saveStrategy(userId, args),
-        set_guidelines_manners_rules: ()=> this.intentProcessor.saveGuidelines(userId, args.query),
-        get_guidelines_manners_rules: ()=> this.intentProcessor.getGuidelines(userId),
-        get_30day_chat_history: ()=> this.intentProcessor.getChatHistory(userId),
-        start_bitrefill_shopping_flow: ()=> this.intentProcessor.startBitrefillShoppingFlow(chatId, args.email),
-        check_bitrefill_payment_status: ()=> this.intentProcessor.startBitrefillShoppingFlow(chatId, args.invoiceId),
-      };
+          return result;
+        } catch (error) {
+          attempts++;
+          console.warn(
+            `⚠️ Fallback attempt #${attempts} for '${fallbackName}' failed: ${error.message}`
+          );
 
-      const executor = functionMap[name];
-      if (!executor) {
-        throw new Error(`Unknown function: ${name}`);
+          if (!this.isRecoverableError(error) || attempts >= maxFallbackRetries) {
+            throw error; // no more fallback tries
+          }
+
+          // Optionally re-confirm if fallback is also sensitive
+          if (this.requiresConfirmation(fallbackName)) {
+            const userConfirmed = await this.askForConfirmation(
+              { chat: { id: chatId } },
+              fallbackName,
+              JSON.stringify(args)
+            );
+            if (!userConfirmed) {
+              throw new Error(`User canceled fallback retry for '${fallbackName}'.`);
+            }
+          }
+        }
       }
-      // Validate arguments again
-      this.validateRequiredParameters(name, args);
-      return await executor();
-    } catch (error) {
-      // Log full error fields
-      console.error(`❌ Error in executeFunction('${name}')`, {
-        message: error.message,
-        stack: error.stack,
-        functionName: name,
-        args,
-      });
-      await ErrorHandler.handle(error);
-      throw error;
     }
-  }
 
-  /**
-   * getFunctionResponse
-   * -------------------
-   * Incorporates the function result into a new GPT prompt, possibly yielding a next step.
-   */
-  async getFunctionResponse(messages, functionName, result) {
-    try {
-      const newMessage = {
-        role: "function",
-        name: functionName,
-        content: JSON.stringify(result),
-      };
-      const fullMessages = [...messages, newMessage];
-      const trimmedMessages = this.trimRelevantMessages(fullMessages);
-
-      const response = await openAIService.createChatCompletion({
-        model: "gpt-4-0613",
-        messages: trimmedMessages,
-        functions: this.functions,
-        function_call: "auto",
-      });
-
-      const completion = response.choices[0]?.message;
-      if (completion?.function_call) {
-        return {
-          nextFunction: {
-            name: completion.function_call.name,
-            arguments: JSON.parse(completion.function_call.arguments),
+    /**
+     * executeFunction
+     * ---------------
+     * Maps the AI function name to a method in your IntentProcessor or other modules.
+     */
+    async executeFunction(name, args, userId, chatId) {
+      try {
+        // Map function calls to actual method implementations
+        const functionMap = {
+          approve_token: () => this.intentProcessor.handleTokenApproval(args),
+          revoke_token_approval: () => this.intentProcessor.handleTokenRevocation(args),
+          create_solana_payment: () => this.intentProcessor.createSolanaPayment(args),
+          get_market_conditions: () => this.intentProcessor.getMarketConditions(),
+          fetch_market_categories: () => this.intentProcessor.getMarketCategories(),
+          fetch_market_category_metrics: () => this.intentProcessor.getMarketCategoryMetrics(),
+          fetch_coins_by_category: () => this.intentProcessor.getCoinsByCategory(args.categoryId),
+          handle_product_reference: () => this.intentProcessor.handleProductReference(args.userId, args.productId),
+          execute_solana_swap: () => this.intentProcessor.swapTokens(args),
+          handle_address_input: () => this.intentProcessor.handleAddressPaste(args.address, userId),
+          analyze_token_by_symbol: () => this.intentProcessor.getTokenInfoBySymbol(args.tokenSymbol),
+          analyze_token_by_address: () => this.intentProcessor.getTokenInfoByAddress(args.tokenAddress),
+          fetch_trending_tokens_unified: () => this.intentProcessor.getTrendingTokens(),
+          fetch_trending_tokens_by_chain: () => this.intentProcessor.getTrendingTokensByChain(args.network),
+          fetch_trending_tokens_coingecko: () => this.intentProcessor.getTrendingTokensCoinGecko(),
+          fetch_trending_tokens_dextools: () => this.intentProcessor.getTrendingTokensDextools(args.network),
+          fetch_trending_tokens_dexscreener: () => this.intentProcessor.getTrendingTokensDexscreener(),
+          fetch_trending_tokens_twitter: () => this.intentProcessor.getTrendingTokensTwitter(),
+          fetch_trending_tokens_solscan:()=> this.intentProcessor.getTrendingTokensSolscan(),
+          create_price_alert: () => this.intentProcessor.createPriceAlert(userId, chatId, args),
+          view_price_alerts: () => this.intentProcessor.viewPriceAlerts(),
+          edit_price_alert: () => this.intentProcessor.editPriceAlert(args.alertId),
+          view_price_alert: () => this.intentProcessor.getPriceAlert(args.alertId),
+          delete_price_alert: () => this.intentProcessor.deletePriceAlert(args.alertId),
+          create_timed_order: () => this.intentProcessor.createTimedOrder(args),
+          get_portfolio: () => this.intentProcessor.getPortfolio(userId, args.network),
+          get_trade_history: () => this.intentProcessor.getTradeHistory(userId),
+          fetch_flipper_mode_metrics: () => this.intentProcessor.fetchMetrics(),
+          setup_flipper_mode: () => this.intentProcessor.setupFlipperMode(userId),
+          start_flipper_mode: () => this.intentProcessor.startFlipperMode(userId, args),
+          stop_flipper_mode: () => this.intentProcessor.stopFlipperMode(this.bot, userId),
+          monitor_kol: () => this.intentProcessor.startKOLMonitoring(userId, args.query),
+          stop_monitor_kol: () => this.intentProcessor.stopKOLMonitoring(userId, args.handle),
+          search_products: () => this.intentProcessor.handleShopifySearch(args.query),
+          fetch_tweets_for_symbol: () => {
+            const { cashtag, minLikes = 0, minRetweets = 0, minReplies = 0 } = args;
+            return this.intentProcessor.search_tweets_for_cashtag(
+              userId,
+              cashtag,
+              minLikes,
+              minRetweets,
+              minReplies
+            );
           },
+          search_internet: () => this.intentProcessor.performInternetSearch(args.query),
+          token_price_dexscreener: () => this.intentProcessor.performTokenPriceCheck(args.query),
+          token_price_coingecko: () => this.intentProcessor.getTokenInfoFromCoinGecko(args.query),
+          set_reminder: () => this.intentProcessor.saveButlerReminderEmails(userId, args),
+          start_monitoring_reminders: () => this.intentProcessor.monitorButlerReminderEmails(userId, args.text),
+          generate_google_report: () => this.intentProcessor.generateGoogleReport(userId),
+          save_strategy: () => this.intentProcessor.saveStrategy(userId, args),
+          set_guidelines_manners_rules: ()=> this.intentProcessor.saveGuidelines(userId, args.query),
+          get_guidelines_manners_rules: ()=> this.intentProcessor.getGuidelines(userId),
+          get_30day_chat_history: ()=> this.intentProcessor.getChatHistory(userId),
+          start_bitrefill_shopping_flow: ()=> this.intentProcessor.startBitrefillShoppingFlow(chatId, args.email),
+          check_bitrefill_payment_status: ()=> this.intentProcessor.startBitrefillShoppingFlow(chatId, args.invoiceId),
+          bridge_tokens: () => this.intentProcessor.handleBridgeTokens(args, chatId),
+          fetch_bridge_receipts: () => this.intentProcessor.handleFetchBridgeReceipts(args)
         };
+
+        const executor = functionMap[name];
+        if (!executor) {
+          throw new Error(`Unknown function: ${name}`);
+        }
+        // Validate arguments again
+        this.validateRequiredParameters(name, args);
+        return await executor();
+      } catch (error) {
+        // Log full error fields
+        console.error(`❌ Error in executeFunction('${name}')`, {
+          message: error.message,
+          stack: error.stack,
+          functionName: name,
+          args,
+        });
+        await ErrorHandler.handle(error);
+        throw error;
       }
-
-      return {
-        text: completion?.content || "No follow-up detected.",
-        resultSummary: `Results from ${functionName}: ${JSON.stringify(result, null, 2)}`,
-      };
-    } catch (error) {
-      console.error("❌ Error in getFunctionResponse:", {
-        message: error.message,
-        stack: error.stack,
-        functionName,
-        result,
-      });
-      throw error;
     }
-  }
 
-  /**
-   * trimRelevantMessages
-   * --------------------
-   * A naive way of limiting messages to avoid token overflows:
-   * keep last 2 user messages and last 2 assistant messages + all function messages.
-   */
-  trimRelevantMessages(messages) {
-    const userMessages = messages.filter((m) => m.role === "user");
-    const assistantMessages = messages.filter((m) => m.role === "assistant");
+    /**
+     * getFunctionResponse
+     * -------------------
+     * Incorporates the function result into a new GPT prompt, possibly yielding a next step.
+     */
+    async getFunctionResponse(messages, functionName, result) {
+      try {
+        const newMessage = {
+          role: "function",
+          name: functionName,
+          content: JSON.stringify(result),
+        };
+        const fullMessages = [...messages, newMessage];
+        const trimmedMessages = this.trimRelevantMessages(fullMessages);
 
-    const recentUserMessages = userMessages.slice(-2);
-    const recentAssistantMessages = assistantMessages.slice(-2);
+        const response = await openAIService.createChatCompletion({
+          model: "gpt-4-0613",
+          messages: trimmedMessages,
+          functions: this.functions,
+          function_call: "auto",
+        });
 
-    // Keep all function messages (function calls/results)
-    const trimmed = messages.filter(
-      (m) =>
-        m.role === "function" ||
-        recentUserMessages.includes(m) ||
-        recentAssistantMessages.includes(m)
-    );
+        const completion = response.choices[0]?.message;
+        if (completion?.function_call) {
+          return {
+            nextFunction: {
+              name: completion.function_call.name,
+              arguments: JSON.parse(completion.function_call.arguments),
+            },
+          };
+        }
 
-    return trimmed;
-  }
+        return {
+          text: completion?.content || "No follow-up detected.",
+          resultSummary: `Suggest follow up function call to complete user task. Current step Results from ${functionName}: ${JSON.stringify(result, null, 2)}`,
+        };
+      } catch (error) {
+        console.error("❌ Error in getFunctionResponse:", {
+          message: error.message,
+          stack: error.stack,
+          functionName,
+          result,
+        });
+        throw error;
+      }
+    }
+
+    /**
+     * trimRelevantMessages
+     * --------------------
+     * A naive way of limiting messages to avoid token overflows:
+     * keep last 2 user messages and last 2 assistant messages + all function messages.
+     */
+    trimRelevantMessages(messages) {
+      const userMessages = messages.filter((m) => m.role === "user");
+      const assistantMessages = messages.filter((m) => m.role === "assistant");
+
+      const recentUserMessages = userMessages.slice(-6);
+      const recentAssistantMessages = assistantMessages.slice(-8);
+
+      // Keep all function messages (function calls/results)
+      const trimmed = messages.filter(
+        (m) =>
+          m.role === "function" ||
+          recentUserMessages.includes(m) ||
+          recentAssistantMessages.includes(m)
+      );
+
+      return trimmed;
+    }
 }
 
 export const autonomousProcessor = new UnifiedAutonomousProcessor();

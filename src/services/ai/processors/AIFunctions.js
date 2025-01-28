@@ -77,26 +77,40 @@ export const AIFunctions = [
         
       // Trading Functions
       {
-          name: "execute_trade",
-          description: "Execute a token trade (buy/sell)",
-          parameters: {
+        name: "execute_solana_swap",
+        description: `
+          Swap tokens on Solana using Jupiter. 
+          Provide a valid wallet (Keypair or user ID reference), the input SPL mint, 
+          the output SPL mint, and the amount in smallest token units (e.g. lamports).
+        `,
+        parameters: {
           type: "object",
           properties: {
-              action: { type: "string", enum: ["buy", "sell"], description: "Trade action" },
-              tokenAddress: { type: "string", description: "Token contract address" },
-              amount: { type: "string", description: "Amount to trade" },
-              walletAddress: { type: "string", description: "Wallet to trade from" },
-              options: {
-              type: "object",
-              properties: {
-                  slippage: { type: "number", description: "Slippage tolerance %" },
-                  autoApprove: { type: "boolean", description: "Auto-approve tokens for EVM" }
-              }
-              }
+            wallet: {
+              type: "string",
+              description: `
+                The Solana wallet to use. This could be a direct "Keypair" reference 
+                or a user ID from which we can derive the Keypair. 
+                If you store the wallet on the server, pass the user ID.`
+            },
+            inputMint: {
+              type: "string",
+              description: "SPL mint address of the token to swap from."
+            },
+            outputMint: {
+              type: "string",
+              description: "SPL mint address of the token to swap to."
+            },
+            amount: {
+              type: "string",
+              description: `
+                The amount in smallest token units (e.g. lamports) to swap. 
+                For example, if you're swapping 1 SOL, that's 1000000000 lamports.`
+            }
           },
-          required: ["action", "tokenAddress", "amount", "walletAddress"]
-          }
-      },
+          required: ["wallet", "inputMint", "outputMint", "amount"]
+        }
+      },      
   
       // Market Analysis Functions
       {
@@ -622,7 +636,7 @@ export const AIFunctions = [
   
       {
           name: "token_price_coingecko",
-          description: "Fetch token prices as First source for all token prices. Check for Bitcoin, ETH, SOL, LTC, BNB, and other established tokens.",
+          description: "Fetch token prices as First source for all token prices. Fetch token prices from CoinGecko. If it fails or yields no data, you may fallback to searching the internet or Dextools.",
           parameters: {
           type: "object",
           properties: {
@@ -635,7 +649,7 @@ export const AIFunctions = [
       // Token Analysis Functions
       {
           name: "analyze_token_by_symbol",
-          description: "Not for social sentiment check. Fetch full token metadata by symbol: priceNative, priceUsd, txns, volume, priceChange, liquidity, marketCap, pairCreatedAt, info & socials, chainID, DEX, url, pairAddress",
+          description: "Not for social sentiment check. Fetch extra token metadata by symbol: priceNative, priceUsd, txns, volume, priceChange, liquidity, marketCap, pairCreatedAt, info & socials, chainID, DEX, url, pairAddress",
           parameters: {
           type: "object",
           properties: {
@@ -647,7 +661,7 @@ export const AIFunctions = [
   
       {
           name: "analyze_token_by_address",
-          description: "Not for social sentiment check. Fetch full token metadata by token address: priceNative, priceUsd, txns, volume, priceChange, liquidity, marketCap, pairCreatedAt, info & socials, chainID, DEX, url, pairAddress",
+          description: "Not for social sentiment check. Fetch extra token metadata by token address: priceNative, priceUsd, txns, volume, priceChange, liquidity, marketCap, pairCreatedAt, info & socials, chainID, DEX, url, pairAddress",
           parameters: {
           type: "object",
           properties: {
@@ -798,4 +812,81 @@ export const AIFunctions = [
           required: ["invoiceId"],
         }
       },
+
+      // Wormhole Bridging: Solana, Base, Avalanche, Arbitrum - ETH is dead to me...
+      {
+        name: "bridge_tokens",
+        description: `
+          Perform a cross-chain bridging of tokens among these mainnet chains:
+          [solana, base, avalanche, arbitrum].
+          Support only [NATIVE, wSOL, wETH, USDC].
+          The bridging logic will pick the correct addresses for wSOL or wETH 
+          based on chain, or treat "NATIVE" accordingly (SOL, ETH, AVAX, etc.).
+        `,
+        parameters: {
+          type: "object",
+          properties: {
+            sourceChain: {
+              type: "string",
+              enum: ["solana", "ethereum", "avalanche"],
+              description: "The chain to bridge from (mainnet)."
+            },
+            targetChain: {
+              type: "string",
+              enum: ["solana", "ethereum", "avalanche"],
+              description: "The chain to bridge to (mainnet)."
+            },
+            tokenSymbol: {
+              type: "string",
+              enum: ["NATIVE", "wSOL", "wETH", "USDC"],
+              description: `
+                Which token to bridge? 
+                - NATIVE means the main chain asset: SOL (Solana), ETH (Base/Arbitrum), AVAX (Avalanche).
+                - wSOL/wETH are wrapped versions on certain chains.
+                - USDC is on all four chains in mainnet form.
+              `
+            },
+            amount: {
+              type: "string",
+              description: "Amount of tokens to bridge, as a decimal string"
+            },
+            recipientAddress: {
+              type: "string",
+              description: `
+                The address on targetChain to receive bridged tokens. 
+                For Solana, expect a base58 address. 
+                For EVM (Base, Avalanche, Arbitrum), expect a 0x address.
+              `
+            }
+          },
+          required: [
+            "sourceChain",
+            "targetChain",
+            "tokenSymbol",
+            "amount",
+            "recipientAddress"
+          ]
+        }
+      },
+
+      // Fetch bridge receipts from wormhole
+      {
+        name: "fetch_bridge_receipts",
+        description: "Fetch the user's bridging records from DB, optionally limit the number of results.",
+        parameters: {
+          type: "object",
+          properties: {
+            telegramId: {
+              type: "string",
+              description: "User's telegram ID"
+            },
+            limit: {
+              type: "number",
+              description: "Number of records to return (default 10)"
+            }
+          },
+          required: ["telegramId"]
+        }
+      },
+      
 ];

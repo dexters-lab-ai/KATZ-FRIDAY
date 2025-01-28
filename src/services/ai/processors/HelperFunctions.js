@@ -2,11 +2,22 @@ import { EventEmitter } from 'events';
 import { AIFunctions } from './AIFunctions.js';
 import { openAIService } from '../openai.js';
 import { ErrorHandler } from '../../../core/errors/index.js';
+import { isDataInsufficient } from './DataValidator.js';
+
+const MAX_TELEGRAM_CHARS = 4096;
 
 export class HelperFunctions {
   constructor(bot) {
     this.bot = bot;
     this.functions = AIFunctions;
+  }
+
+  /**
+   * A simple pass-through to the imported function isDataInsufficient,
+   * so the rest of the app can do "this.isDataInsufficient(...)"
+   */
+  isDataInsufficient(result) {
+    return isDataInsufficient(result);
   }
 
   /**
@@ -274,6 +285,17 @@ export class HelperFunctions {
       ],
 
       /**
+       * A multi-step flow for:
+       * 1) Internet Searches
+       */
+      internet_searches_multiple: [
+        // Optionally do a quick news search
+        { name: "search_internet", dependencies: [], arguments: {} },
+        // Search in sequence
+        { name: "search_internet", dependencies: ["search_internet"], arguments: {} },
+      ],
+
+      /**
        * Another example: bitrefill shopping flow
        */
       bitrefill_giftcard_flow: [
@@ -334,20 +356,38 @@ export class HelperFunctions {
   /**
    * Format an object/array to string, handle large data
    */
-  formatResultForDisplay(result, limit = 50) {
+  /**
+   * Send a message in HTML, splitting into multiple messages if text > 4096 chars.
+   */
+  async sendMessageWithLimit(chatId, text, parseMode = "HTML") {
+    const chunkSize = MAX_TELEGRAM_CHARS;
+    let start = 0;
+    while (start < text.length) {
+      const chunk = text.slice(start, start + chunkSize);
+      await this.bot.sendMessage(chatId, chunk, { parse_mode: parseMode });
+      start += chunkSize;
+    }
+  }
+
+  /**
+   * formatResultForDisplay
+   * 
+   * Moved from old code, no markdown escaping. 
+   * If you want to protect HTML, do an optional escapeHtml.
+   */
+  formatResultForDisplay(result, limit = 100) {
     if (result == null) return "No data.";
 
     const processValue = (val, path = "") => {
       if (val == null) return "null";
+
       if (Array.isArray(val)) {
         if (val.length > limit) {
-          return `[${val
-            .slice(0, limit)
-            .map((x, i) => processValue(x, `${path}[${i}]`))
-            .join(", ")}] ... truncated`;
+          return `[${val.slice(0, limit).map((x, i) => processValue(x, `${path}[${i}]`)).join(", ")}] ... truncated`;
         }
         return `[${val.map((x, i) => processValue(x, `${path}[${i}]`)).join(", ")}]`;
       }
+
       if (typeof val === "object") {
         const entries = Object.entries(val);
         if (entries.length > limit) {
@@ -358,33 +398,33 @@ export class HelperFunctions {
           return JSON.stringify(partial, null, 2) + " ... truncated";
         }
         return entries
-          .map(([k, v]) => `${this.escapeMarkdown(k)}: ${processValue(v, `${path}.${k}`)}`)
+          .map(([k, v]) => `${k}: ${processValue(v, `${path}.${k}`)}`)
           .join("\n");
       }
-      if (typeof val === "string") return this.escapeMarkdown(val);
-      return this.escapeMarkdown(String(val));
+
+      // Otherwise string/number/bool
+      return String(val);
     };
 
     if (typeof result === "object") {
       return processValue(result, "");
     }
-    return this.escapeMarkdown(String(result));
+    return String(result);
   }
 
-  escapeMarkdown(text) {
-    if (!text) return "";
-    return text
-      .replace(/[_*`[\]()~>#+\-=|{}.!]/g, "\\$&")
-      .replace(/(\r\n|\r|\n)/g, "\n")
-      .replace(/\\\./g, ".");
-  }
-
+  /**
+   * formatResults
+   * For multi-step final summary
+   */
   formatResults(results) {
     return results
       .map((res, i) => `Step ${i + 1}:\n${res}`)
       .join("\n\n");
   }
 
+  /**
+   * notifyUserWithRetry
+   */
   async notifyUserWithRetry(type, msg, taskName, extra, max = 3) {
     let attempt = 0;
     while (attempt < max) {
@@ -396,20 +436,25 @@ export class HelperFunctions {
     return false;
   }
 
+  /**
+   * notifyUser
+   * Now using HTML parse mode, chunk-splitting, no markdown escapes
+   */
   async notifyUser(type, msg, taskName = "", extra = "") {
     try {
       if (!msg?.chat?.id) return false;
-      const t = this.escapeMarkdown(taskName);
-      const e = this.escapeMarkdown(extra.slice(0, 1000));
+      const chatId = msg.chat.id;
+      const truncatedExtra = extra.slice(0, 2000); // or any safe cutoff
 
       const map = {
-        start: `🔄 Starting ${t}...`,
-        complete: `✅ ${t} completed.\n${e}`,
-        followUp: `🔄 Proceeding with ${t}...`,
-        error: `❌ Error in ${t}.\n${e}`,
+        start: `🔄 <b>Starting</b> ${taskName}...`,
+        complete: `✅ <b>${taskName} completed</b>.\n${truncatedExtra}`,
+        followUp: `🔄 <i>Proceeding with</i> ${taskName}...`,
+        error: `❌ <b>Error in</b> ${taskName}.\n${truncatedExtra}`,
       };
-      const textToSend = map[type] || e || "⚠️";
-      await this.bot.sendMessage(msg.chat.id, textToSend, { parse_mode: "Markdown" });
+
+      const textToSend = map[type] || truncatedExtra || "⚠️";
+      await this.sendMessageWithLimit(chatId, textToSend, "HTML");
       return true;
     } catch (error) {
       console.error("❌ notifyUser error:", error.message);
@@ -417,21 +462,72 @@ export class HelperFunctions {
     }
   }
 
+  /**
+   * fallbackResponse
+   * 
+   * Also HTML parse mode
+   */
   async fallbackResponse(msg, explanation) {
     try {
-      const ex = this.escapeMarkdown(explanation);
-      await this.bot.sendMessage(msg.chat.id, `⚠️ ${ex}`, { parse_mode: "Markdown" });
+      if (!msg?.chat?.id) return;
+      const finalText = `⚠️ ${explanation}`;
+      await this.sendMessageWithLimit(msg.chat.id, finalText, "HTML");
     } catch (err) {
       console.error("❌ fallbackResponse error:", err.message);
     }
   }
 
+  /**
+   * isRecoverableError
+   * ------------------
+   * Checks if error is something we want to retry or fallback on:
+   * - network timeouts (ETIMEDOUT, ENOTFOUND, ECONNRESET, 503, etc.)
+   * - certain 4XX or 5XX HTTP statuses (404, 429, 502, 503, etc.)
+   * - more...
+   */
   isRecoverableError(error) {
-    const recoverable = ["ECONNRESET", "ETIMEDOUT", "NetworkError", "ENOTFOUND", "AggregateError"];
-    return (
-      recoverable.some((kw) => error.message.includes(kw)) ||
-      (error.name && recoverable.includes(error.name))
-    );
+    // 1) Standard networking keys
+    const recoverableKeywords = [
+      "ECONNRESET",
+      "ETIMEDOUT",
+      "NetworkError",
+      "ENOTFOUND",
+      "AggregateError"
+    ];
+
+    // 2) Some typical HTTP status codes that might be "retryable"
+    // If you don't want to retry on 404, remove it.
+    // If 402 (Payment Required) can be solved by a quick fix, lets keep it; otherwise remove.
+    const recoverableHttpCodes = ["404", "402", "408", "429", "500", "502", "503", "504"];
+
+    // 3) We can check error.code, error.statusCode, or parse error.message
+    const messageLower = (error.message || "").toLowerCase();
+
+    // If error has an explicit code or statusCode:
+    if (error.code && recoverableHttpCodes.includes(String(error.code))) {
+      return true;
+    }
+    if (error.statusCode && recoverableHttpCodes.includes(String(error.statusCode))) {
+      return true;
+    }
+
+    // Then check if message includes or exactly matches
+    for (const kw of recoverableKeywords) {
+      if (messageLower.includes(kw.toLowerCase())) {
+        
+      console.log('📩 Error Keyword: ', JSON.stringify(messageLower, null, 2));
+        return true;
+      }
+    }
+    for (const http of recoverableHttpCodes) {
+      if (messageLower.includes(http)) {
+        console.log('📩 Error Code: ', JSON.stringify(messageLower, null, 2));
+        return true;
+      }
+    }
+
+    // If we don't find any match, treat as not recoverable
+    return false;
   }
   
 }

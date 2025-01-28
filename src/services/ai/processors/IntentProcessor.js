@@ -25,6 +25,7 @@ import { dbAIInterface } from '../../db/DBAIInterface.js';
 import { contextManager } from '../ContextManager.js';
 import { dexscreener } from '../../dexscreener/index.js';
 import BitrefillService from "../../bitrefill/BitrefillService.js";
+import WormholeBridgeService from '../../Wormhole/WormholeBridgeService.js';
 
 export class IntentProcessor extends EventEmitter {
   constructor(bot) {
@@ -36,6 +37,7 @@ export class IntentProcessor extends EventEmitter {
     this.dexscreener = dexscreener;
     this.bitrefillService = new BitrefillService(bot);
     this.solanaSwapService = new SolanaSwapService();
+    this.bridgeService = new WormholeBridgeService();
   }
 
   async initialize() {
@@ -48,6 +50,7 @@ export class IntentProcessor extends EventEmitter {
         shopifyService.initialize(),
         solanaPayService.initialize(),
         butlerService.initialize(),
+        this.bridgeService.initialize(),
       ]);
 
       this.initialized = true;
@@ -514,58 +517,84 @@ export class IntentProcessor extends EventEmitter {
   }
 
   async performTokenPriceCheck(token) {
+    // 1) Sanitize input
+    const sanitizedToken = token.trim().replace(/[\u0000-\u001F\u007F]/g, "");
+  
+    // 2) Detect if input is an address or symbol (basic checks for EVM or Solana addresses)
+    const isAddress = /^[a-zA-Z0-9]{35,44}$/.test(sanitizedToken); 
+    const isSymbol = /^[a-zA-Z0-9]{2,10}$/.test(sanitizedToken);
+  
+    // 3) First Attempt: DexScreener
+    let dexscreenerData;
     try {
-      // Sanitize the input by trimming spaces and removing non-printable characters
-      const sanitizedToken = token.trim().replace(/[\u0000-\u001F\u007F]/g, "");
-  
-      // Determine if input is a symbol or address
-      const isAddress = /^[a-zA-Z0-9]{35,42}$/.test(sanitizedToken); // Solana/EVM addresses
-      const isSymbol = /^[a-zA-Z0-9]{2,10}$/.test(sanitizedToken); // Token symbols
-  
-      // Query DexScreener based on input type
-      const dexscreenerData = isAddress
-        ? await this.dexscreener.getTokenInfoByAddress(sanitizedToken)
-        : isSymbol
-        ? await this.dexscreener.getTokenInfoBySymbol(sanitizedToken)
-        : null;
-  
-      // If DexScreener fails, fallback to Dextools
-      const tokenData = dexscreenerData
-        ? this.extractFirstObject(dexscreenerData)
-        : await this.dextools.getTokenInfo(sanitizedToken).catch(() => null);
-  
-      return tokenData || { error: "Failed to retrieve token data from both sources." };
-    } catch (error) {
-      // If an error occurs, fallback to CoinGecko as the last resort
-      const fallbackData = await this.getTokenInfoFromCoinGecko(token).catch(() => null);
-  
-      if (fallbackData) return fallbackData;
-  
-      console.error("Error fetching token data:", error);
-      return { error: "Unexpected error occurred while fetching token data." };
-    }
-  }   
-
-  async getTokenInfoFromCoinGecko(input) {
-    try {
-      // Attempt to fetch token info from CoinGecko
-      return await this.intentProcessHandler.getTokenInfoFromCoinGecko(input);
-    } catch (error) {
-      console.warn("CoinGecko failed, falling back to DexScreener:", error.message);
-  
-      // Determine if the input is a symbol or an address
-      const isAddress = /^0x[a-fA-F0-9]{40}$/.test(input) || input.length === 44;
-  
-      // Fallback to DexScreener methods
       if (isAddress) {
-        console.log("Input detected as token address, using getTokenInfoByAddress.");
-        return await this.getTokenInfoByAddress(input);
-      } else {
-        console.log("Input detected as token symbol, using getTokenInfoBySymbol.");
-        return await this.getTokenInfoBySymbol(input);
+        dexscreenerData = await this.dexscreener.getTokenInfoByAddress(sanitizedToken);
+      } else if (isSymbol) {
+        dexscreenerData = await this.dexscreener.getTokenInfoBySymbol(sanitizedToken);
+      }
+    } catch (err) {
+      console.warn("DexScreener fetch failed:", err.message);
+      dexscreenerData = null;
+    }
+  
+    if (dexscreenerData) {
+      // DexScreener may return an array or object—extractFirstObject helps parse
+      const extracted = this.extractFirstObject(dexscreenerData);
+      if (extracted) {
+        return extracted; 
       }
     }
-  } 
+  
+    // 4) Second Attempt: Dextools
+    let dexToolsData = null;
+    try {
+      dexToolsData = await this.dextools.getTokenInfo(sanitizedToken);
+    } catch (err) {
+      console.warn("Dextools fetch failed:", err.message);
+      dexToolsData = null;
+    }
+  
+    if (dexToolsData) {
+      return dexToolsData;
+    }
+  
+    // 5) Final Fallback: CoinGecko
+    try {
+      const coingeckoData = await this.getTokenInfoFromCoinGecko(sanitizedToken);
+      if (coingeckoData) {
+        return coingeckoData; 
+      }
+    } catch (err) {
+      console.error("CoinGecko also failed:", err.message);
+    }
+  
+    // 6) If all fail
+    return { error: "Failed to retrieve token data from DexScreener, Dextools, or CoinGecko." };
+  }
+  
+  async getTokenInfoFromCoinGecko(input) {
+    try {
+      // 1) Primary attempt: call your CoinGecko logic
+      return await this.intentProcessHandler.getTokenInfoFromCoinGecko(input);
+    } catch (error) {
+      console.warn("CoinGecko fetch failed:", error.message);
+  
+      // 2) If CoinGecko fails, fallback to DexScreener by address or symbol
+      const isAddress = /^0x[a-fA-F0-9]{40}$/.test(input) || input.length === 44;
+      try {
+        if (isAddress) {
+          console.log("→ Input looks like a token address. Using getTokenInfoByAddress.");
+          return await this.getTokenInfoByAddress(input);
+        } else {
+          console.log("→ Input looks like a token symbol. Using getTokenInfoBySymbol.");
+          return await this.getTokenInfoBySymbol(input);
+        }
+      } catch (fallbackErr) {
+        console.error("DexScreener fallback also failed:", fallbackErr.message);
+        return null; // Return null so the calling method can do a final error
+      }
+    }
+  }  
   
   async startBitrefillShoppingFlow(chatId, email) {
     
@@ -703,6 +732,47 @@ export class IntentProcessor extends EventEmitter {
     }
     return this.formatSingleProduct(product);
   }
+
+  
+  /**
+   * Bridge Tokens
+   * -------------
+   * 1) figure out sourceChain, targetChain 
+   * 2) figure out token (native or address)
+   * 3) set up a route -> pick best route
+   * 4) initiate bridging
+   * 5) track bridging
+   */
+  async handleBridgeTokens(args, chatId) {
+    // Provide the "bot" and "chatId" so WormholeBridgeService can log steps
+    return await this.WormholeBridgeService.bridgeTokens(args, this.bot, chatId);
+  }
+
+  getTokenAddress(chain, tokenSymbol) {
+    if (tokenSymbol === "NATIVE") {
+      // If bridging the chain's main asset
+      return "native";
+    }
+    // Otherwise look up in the map
+    const addressesForChain = tokenAddressMap[chain];
+    if (!addressesForChain) throw new Error(`Chain not supported: ${chain}`);
+    const addr = addressesForChain[tokenSymbol];
+    if (!addr) throw new Error(`Token ${tokenSymbol} not supported on ${chain}`);
+    return addr;
+  }
+
+  async handleFetchBridgeReceipts({ telegramId, limit }) {
+    try {
+      limit = limit || 10;
+      const records = await User.fetchUserBridgingRecords(telegramId, limit);
+      return {
+        bridgingRecords: records
+      };
+    } catch (err) {
+      console.error("handleFetchBridgeReceipts error:", err);
+      throw err;
+    }
+  }  
 
   cleanup() {
     this.removeAllListeners();

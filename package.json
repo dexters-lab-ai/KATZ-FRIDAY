@@ -21,6 +21,7 @@
     "@solana/web3.js": "^1.98.0",
     "@walletconnect/modal": "^2.7.0",
     "@walletconnect/sign-client": "^2.17.2",
+    "@wormhole-foundation/sdk": "^1.4.5",
     "alchemy-sdk": "^3.1.0",
     "apify-client": "^2.8.4",
     "axios": "^1.6.2",
@@ -57,6 +58,7 @@
     "sharp": "^0.33.5",
     "speech-to-text": "^2.9.1",
     "telegraf": "^4.16.3",
+    "uuid": "^11.0.5",
     "ws": "^8.14.2"
   },
   "devDependencies": {
