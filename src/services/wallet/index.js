@@ -144,7 +144,7 @@ class WalletService extends EventEmitter {
           return [];
         }
     
-        console.log(`🔍 User data retrieved for ID ${userId}:`, JSON.stringify(user, null, 2));
+        console.log(`🔍 User data retrieved to fetch Network for ID ${userId}:`, JSON.stringify(user, null, 2));
     
         // Get wallets for the specified network
         const networkWallets = user.wallets?.[network] || [];

@@ -3,32 +3,32 @@ import { getTokenPrice as getAlchemyTokenPrice } from '../alchemy/alchemyService
 import { getSolanaTokenInfo } from '../solana/solanaService.js';
 import { dexToolsWebSocket } from './websocket.js';
 import { dextoolsRequest } from '../api/api.js';
-import { circuitBreakers } from '../../core/circuit-breaker/index.js';
-import { BREAKER_CONFIGS } from '../../core/circuit-breaker/index.js';
+import { circuitBreakers, BREAKER_CONFIGS } from '../../core/circuit-breaker/index.js';
 import { getNetworkSegment } from '../../utils/network.js';
 
 // Fetch trending tokens (DexTools hot pools)
+// Lets dedicate Dextools to Base and ETH (and AVAX coming)
 export async function fetchTrendingTokens(network) {
   const networkSegment = getNetworkSegment(network);
   if (!networkSegment) throw new Error(`Unsupported network: ${network}`);
-  
+
   return circuitBreakers.executeWithBreaker(
     'dextools',
     async () => {
       const data = await dextoolsRequest(`/ranking/${networkSegment}/hotpools`, null);
       if (!data?.data) throw new Error('Invalid response from DexTools API');
 
-      // Better Dev Logging
-      console.log('dextools token data: ', JSON.stringify(data, null, 2));
+      // Log the raw data for debugging
+      // console.log('DexTools token data:', JSON.stringify(data, null, 2));
 
-      // Format and extract relevant data
-      return data.data.map((token) => ({
+      // Format the data for better usability
+      return data.data.map(token => ({
         rank: token.rank,
-        tokenName: token.mainToken?.name || "Unknown Token", // Default to "Unknown Token"
-        tokenSymbol: token.mainToken?.symbol || "N/A", // Default to "N/A"
-        tokenAddress: token.mainToken?.address || "N/A", // Default to "N/A"
-        exchangeName: token.exchange?.name || "Unknown Exchange", // Include exchange information
-        creationTime: token.creationTime || "N/A", // Include creation time
+        tokenName: token.mainToken?.name || 'Unknown Token', // Default to "Unknown Token"
+        tokenSymbol: token.mainToken?.symbol || 'N/A', // Default to "N/A"
+        tokenAddress: token.mainToken?.address || 'N/A', // Default to "N/A"
+        exchangeName: token.exchange?.name || 'Unknown Exchange', // Include exchange information
+        creationTime: token.creationTime || 'N/A', // Include creation time
       }));
     },
     BREAKER_CONFIGS.dextools
@@ -85,7 +85,7 @@ export async function getTokenInfo(network, tokenAddress) {
 
 // Format and analyze token data (DexTools)
 export async function formatTokenAnalysis(network, tokenAddress) {
-  console.log(network, ': Network, Txn token address:', tokenAddress);
+  // console.log(network, ': Network, Txn token address:', tokenAddress);
   if (network === 'solana') throw new Error('Token analysis is not supported for Solana.');
   return circuitBreakers.executeWithBreaker(
     'dextools',

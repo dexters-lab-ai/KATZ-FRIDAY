@@ -164,8 +164,6 @@ class TrendingService extends EventEmitter {
   
       // Limit tokens to 20
       const limitedTokens = shuffledTokens.slice(0, 20);
-
-      console.log("LIMITED TOKENS======================", limitedTokens);
   
       // Return combined result with tokens and tweets
       return {
@@ -193,35 +191,146 @@ class TrendingService extends EventEmitter {
       [shuffled[i], shuffled[randomIndex]] = [shuffled[randomIndex], shuffled[i]];
     }
     return shuffled;
+  }
+
+  async fetchTrendingEVM() {
+    const supportedNetworks = ['ethereum', 'base', 'solana']; // Supported networks
+    const networks = ['base', 'ethereum', 'avalanche']; // Networks to fetch
+    const MAX_PAIRS = 5; // Maximum number of pairs to include in the final result
+    const MAX_TELEGRAM_MESSAGE_LENGTH = 4096; // Telegram's maximum message length
+    const cacheKey = 'trending:evm';
+  
+    try {
+      // Check if all networks are supported
+      const unsupportedNetworks = networks.filter(network => !supportedNetworks.includes(network.toLowerCase()));
+      if (unsupportedNetworks.length > 0) {
+        return `I only support Solana, Ethereum, and Base for now... Unsupported networks: ${unsupportedNetworks.join(', ')}`;
+      }
+  
+      // Fetch cached results first
+      const cached = await cacheService.get(cacheKey);
+      if (cached) {
+        console.log('📦 Returning cached trending EVM tokens.');
+        return cached;
+      }
+  
+      // Fetch trending tokens from all specified networks in parallel
+      const fetchPromises = networks.map(network => dextools.fetchTrendingTokens(network));
+      const results = await Promise.allSettled(fetchPromises);
+  
+      // Extract successful results and flatten them
+      const successfulResults = results
+        .filter(result => result.status === 'fulfilled')
+        .map(result => result.value)
+        .flat();
+  
+      // Log errors for rejected promises
+      const failedResults = results
+        .filter(result => result.status === 'rejected')
+        .map(result => result.reason);
+  
+      if (failedResults.length > 0) {
+        failedResults.forEach((error, index) => {
+          console.error(`Error fetching trending tokens for network ${networks[index]}:`, error);
+        });
+      }
+  
+      if (successfulResults.length === 0) {
+        console.warn('No trending tokens fetched successfully from any EVM network.');
+        return [];
+      }
+  
+      // Sort the combined tokens by totalAmount descendingly
+      const sortedTokens = successfulResults.sort((a, b) => b.totalAmount - a.totalAmount);
+  
+      // Select the top MAX_PAIRS tokens
+      const topTokens = sortedTokens.slice(0, MAX_PAIRS);
+  
+      // Ensure the message length does not exceed Telegram's limit
+      let currentLength = 0;
+      const trimmedTokens = [];
+      for (const token of topTokens) {
+        const tokenString = JSON.stringify(token);
+        if (currentLength + tokenString.length > MAX_TELEGRAM_MESSAGE_LENGTH) {
+          console.warn('Reached Telegram message length limit.');
+          break;
+        }
+        trimmedTokens.push(token);
+        currentLength += tokenString.length;
+      }
+  
+      console.log(`Final tokens to be sent (under Telegram limit):`, JSON.stringify(trimmedTokens, null, 2));
+  
+      // Cache the final trimmed tokens
+      await cacheService.set(cacheKey, trimmedTokens, CACHE_DURATION);
+  
+      return trimmedTokens;
+    } catch (error) {
+      console.error('Error in fetchTrendingEVM:', error);
+      throw error;
+    }
   }  
   
   async getBoostedTokens() {
     const cacheKey = 'trending:boosted';
+    const MAX_TELEGRAM_MESSAGE_LENGTH = 4096; // Telegram's maximum message length
+    const MAX_PAIRS = 5; // Maximum number of pairs to include
+
     try {
-      const cached = await cacheService.get(cacheKey);
-  
-      if (cached) {
-        console.log('📦 Returning cached boosted tokens.');
-        // Trim cached results to the latest 8
-        return cached.slice(0, 6);
-      }
-  
-      // Fetch boosted pairs
-      const pairs = await dexscreener.getBoostedPairs();
-  
-      // Format the pairs for Telegram
-      const formattedPairs = pairs.map(pair => this.generateTelegramMessage(this.formatPair(pair)));
-  
-      // Cache the results for a predefined duration
-      await cacheService.set(cacheKey, formattedPairs, CACHE_DURATION);
-  
-      // Return only the latest 8 formatted pairs
-      return formattedPairs.slice(0, 6);
+        const cached = await cacheService.get(cacheKey);
+
+        if (cached) {
+            console.log('📦 Returning cached boosted tokens.');
+            // Trim cached results to the latest 5
+            return cached.slice(0, MAX_PAIRS);
+        }
+
+        // Fetch boosted pairs
+        const pairs = await dexscreener.getBoostedPairs();
+
+        if (pairs.length === 0) {
+            console.warn("No boosted pairs available to process.");
+            return [];
+        }
+
+        // Sort the pairs by totalAmount descendingly
+        const sortedPairs = pairs.sort((a, b) => b.totalAmount - a.totalAmount);
+
+        // Select top 5 pairs
+        const topPairs = sortedPairs.slice(0, MAX_PAIRS);
+
+        //console.log(`Top pairs count after sorting and slicing: ${topPairs.length}`);
+
+        // Optional: Ensure the combined message does not exceed Telegram's limit
+        // Here, we assume each pair's data is concise enough. If not, implement additional trimming.
+        let combinedMessageLength = 0;
+        const trimmedTopPairs = [];
+
+        for (const pair of topPairs) {
+            // Estimate the length of each pair's string representation
+            const pairString = JSON.stringify(pair);
+            combinedMessageLength += pairString.length;
+
+            if (combinedMessageLength <= MAX_TELEGRAM_MESSAGE_LENGTH) {
+                trimmedTopPairs.push(pair);
+            } else {
+                console.warn(`Adding pair ${pair.symbol} would exceed Telegram's message limit. Skipping.`);
+                break; // Exit the loop if the next pair would exceed the limit
+            }
+        }
+
+        //console.log(`Trimmed top pairs count to fit Telegram's limit: ${trimmedTopPairs.length}`);
+
+        // Cache the trimmed top pairs
+        await cacheService.set(cacheKey, trimmedTopPairs, CACHE_DURATION);
+
+        // Return the trimmed top 5 pairs
+        return trimmedTopPairs;
     } catch (error) {
-      await ErrorHandler.handle(error);
-      throw error;
+        await ErrorHandler.handle(error);
+        throw error;
     }
-  }  
+  }
 
   filterPairsByNetwork(pairs, network) {
     if (!Array.isArray(pairs)) return [];
@@ -232,36 +341,29 @@ class TrendingService extends EventEmitter {
 
   formatPair(pair) {
     return {
-      network: pair.chainId?.toLowerCase() || 'Unknown',
+      network: pair.chainId ? pair.chainId.toLowerCase() : 'unknown', // Dynamically set based on data
       address: pair.tokenAddress || 'Unknown',
-      name: pair.name || 'Unknown',
+      name: pair.symbol || 'Unknown', // Using 'symbol' from formatBoostedData as 'name'
       description: pair.description || 'No description available.',
-      icon: pair.icon || null,
       links: this.formatLinks(pair.links),
       metrics: {
-        totalAmount: pair.totalAmount || 'N/A',
-        amount: pair.amount || 'N/A',
-        volume24h: pair.volume24h || 0,
+        totalAmount: pair.totalAmount || 0,
+        amount: pair.amount || 0,
+        // Removed volume24h as it's not present in the data
       },
       dexscreener: {
         url: pair.url || '#',
-        header: pair.header || null,
-        openGraph: pair.openGraph || null,
+        // Removed 'header' and 'openGraph' as they're unnecessary
       },
     };
-  }
+  }   
 
   formatLinks(links) {
-    if (!Array.isArray(links)) return {};
-    const formattedLinks = {};
-    links.forEach(link => {
-      if (link.type) {
-        formattedLinks[link.type] = link.url;
-      } else if (link.label === 'Website') {
-        formattedLinks.website = link.url;
-      }
-    });
-    return formattedLinks;
+    return {
+      website: links.website || null,
+      twitter: links.twitter || null,
+      telegram: links.telegram || null,
+    };
   }
 
   generateTelegramMessage(token) {
@@ -270,35 +372,28 @@ class TrendingService extends EventEmitter {
       address = 'Unknown',
       name = 'Unknown',
       description = 'No description available.',
-      icon,
       links = {},
       metrics = {},
       dexscreener = {},
     } = token;
-
-    const { totalAmount = 'N/A', amount = 'N/A', volume24h = 0 } = metrics;
-
+  
+    const { totalAmount = 'N/A', amount = 'N/A' } = metrics;
+  
     const message = `
-🌟 **[${name !== 'Unknown' ? name : 'Token'}](${dexscreener.url || '#'})**  
-_${description}_
-
-🪙 **Address:** [${address}](${dexscreener.url || '#'})  
-🔗 **Network:** ${network}  
-📊 **Total Supply:** ${totalAmount}  
-📈 **Available:** ${amount}  
-💰 **24h Volume:** ${volume24h.toLocaleString()} USD
-
-🔗 **Links:**  
-${links.website ? `• [Website](${links.website})` : ''}
-${links.twitter ? `• [Twitter](${links.twitter})` : ''}
-${links.telegram ? `• [Telegram](${links.telegram})` : ''}
+  🌟 **[${name !== 'Unknown' ? name : 'Token'}](${dexscreener.url || '#'})**  
+  _${description}_
+  
+  🪙 **Address:** [${address}](${dexscreener.url || '#'})  
+  🔗 **Network:** ${network}  
+  📊 **Total Supply:** ${totalAmount}  
+  📈 **Available:** ${amount}
+  
+  🔗 **Links:**  
+  ${links.website ? `• [Website](${links.website})` : ''}
+  ${links.twitter ? `• [Twitter](${links.twitter})` : ''}
+  ${links.telegram ? `• [Telegram](${links.telegram})` : ''}
     `.trim();
-
-    const images = [];
-    if (icon) images.push(icon);
-    if (dexscreener.header) images.push(dexscreener.header);
-    if (dexscreener.openGraph) images.push(dexscreener.openGraph);
-
+  
     const buttons = [];
     if (dexscreener.url && this.isValidUrl(dexscreener.url)) {
       buttons.push({ text: 'View on DexScreener', url: dexscreener.url });
@@ -312,10 +407,10 @@ ${links.telegram ? `• [Telegram](${links.telegram})` : ''}
     if (links.telegram && this.isValidUrl(links.telegram)) {
       buttons.push({ text: 'Telegram', url: links.telegram });
     }
-
-    return { message, buttons, images };
-  }
-
+  
+    return { message, buttons };
+  }  
+  
   isValidUrl(url) {
     try {
       new URL(url);
@@ -323,7 +418,7 @@ ${links.telegram ? `• [Telegram](${links.telegram})` : ''}
     } catch (e) {
       return false;
     }
-  }
+  }  
 
   startCacheUpdates() {
     setInterval(async () => {

@@ -460,27 +460,53 @@ export class IntentProcessHandler {
      */
     async fetchCoinsByCategory(categoryId) {
       if (!categoryId) throw new Error('Category ID is required');
-
+    
       try {
         const response = await this.axiosInstance.get('/search', {
           params: { query: categoryId }
         });
-
+    
         const categoryInfo = response.data.categories?.find(
           category => category.id === categoryId
         ) || { id: categoryId, name: 'Unknown Category' };
-
-        const coins = response.data.coins || [];
-
+    
+        let coins = response.data.coins || [];
+    
+        // Log the category info and coins fetched
         console.log(`Category Info for '${categoryId}':`, categoryInfo);
         console.log(`Coins in Category '${categoryId}':`, coins);
-
-        return { category: categoryInfo, coins };
+    
+        // 1) Remove large images (keeping only the 'thumb' image or no image at all)
+        coins = coins.map(coin => {
+          if (coin.large) {
+            delete coin.large; // Remove the 'large' image if it exists
+          }
+          return coin;
+        });
+    
+        // 2) Create a string summary of the coin data (without large images)
+        let coinDetails = coins.map(coin => {
+          return `${coin.name} (${coin.symbol}): Rank ${coin.market_cap_rank} - [More Info](https://www.coingecko.com/en/coins/${coin.id})`;
+        }).join("\n");
+    
+        // 3) Check if the combined string exceeds the Telegram limit
+        const maxTelegramLength = 4096;
+        if (coinDetails.length > maxTelegramLength) {
+          console.warn(`⚠️ Telegram message is too long. Trimming... raw length: `, coinDetails.length);
+          coinDetails = coinDetails.slice(0, maxTelegramLength - 200) + "...";
+        }
+    
+        // 4) Return the result to be sent to the Telegram bot
+        return {
+          category: categoryInfo,
+          coins: coinDetails
+        };
+        
       } catch (error) {
         console.error(`Error fetching coins for category '${categoryId}':`, error.message);
         throw new Error(`Failed to fetch coins for category '${categoryId}'`);
       }
-    }   
+    }    
 
     async getCoinGeckoTrendingTokens() {
       try {

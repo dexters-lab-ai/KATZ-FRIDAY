@@ -4,15 +4,8 @@ import { rateLimiter } from "./rate-limiting/RateLimiter.js";
 import { circuitBreakers } from "./circuit-breaker/index.js";
 import { UnifiedAutonomousProcessor } from "../services/ai/processors/UnifiedAutonomousEngine.js";
 import { contextManager } from "../services/ai/ContextManager.js";
-import { voiceService } from "../services/audio/voiceService.js";
+import { voiceService } from "../services/audio/voiceService.js"; //Has both spee to T & T to spee
 
-/**
- * A specialized message handler that:
- * 1) Sends a random "genie" animation at bottom
- * 2) If >10s => sends "This is taking longer" message, then re-sends the animation again at bottom
- * 3) On final => delete both the animation & "too long" message, then post the final text
- * 4) If voice => TTS => .mp3
- */
 export class UnifiedMessageHandler extends EventEmitter {
   constructor(bot, commandRegistry) {
     super();
@@ -31,7 +24,6 @@ export class UnifiedMessageHandler extends EventEmitter {
   async initialize() {
     if (this.initialized) return;
     try {
-      // Handle text/voice messages
       this.bot.on("message", async (msg) => {
         await circuitBreakers.executeWithBreaker("messages", async () => {
           const isLimited = await rateLimiter.isRateLimited(msg.from.id, "message");
@@ -43,7 +35,6 @@ export class UnifiedMessageHandler extends EventEmitter {
         });
       });
 
-      // Handle callback queries
       this.bot.on("callback_query", async (query) => {
         const callbackId = `${query.from.id}:${query.data}:${Date.now()}`;
         if (this.processedCallbacks.has(callbackId)) return;
@@ -61,36 +52,33 @@ export class UnifiedMessageHandler extends EventEmitter {
     }
   }
 
-  /**
-   * 1) Possibly transcribe voice
-   * 2) Send random "genie" animation at bottom
-   * 3) Keep "typing"
-   * 4) After 10s => "This is taking longer" text + re-send animation at bottom
-   * 5) On final => delete both (animation + "too long") and send final text
-   * 6) If voice => TTS => .mp3
-   * 7) Update context
-   */
   async handleMessage(msg) {
     try {
       let userInput = msg.text;
       let isVoiceInput = false;
 
-      // Log sticker file_id if user sends a sticker
-      if (msg.sticker) {
-        console.log("User sticker file_id:", msg.sticker.file_id);
-      }
-
-      // (A) If voice => transcribe
+      // Handle voice messages
       if (msg.voice) {
         const fileId = msg.voice.file_id;
         const fileUrl = await this.bot.getFileLink(fileId);
-        userInput = await voiceService.transcribeVoice(fileUrl);
-        isVoiceInput = true;
+
+        try {
+          userInput = await voiceService.transcribeVoiceWhisp(fileUrl); // Transcribe voice using Whisper
+          console.log("🎙️ Transcribed voice input:", userInput);
+          isVoiceInput = true;
+        } catch (transcriptionError) {
+          console.error("❌ Voice transcription failed:", transcriptionError.message);
+          await this.bot.sendMessage(
+            msg.chat.id,
+            "⚠️ Sorry, I couldn't understand the voice message. Please try again."
+          );
+          return; // Exit on failure to transcribe
+        }
       }
 
       if (!userInput) return;
 
-      // Possibly a command
+      // Handle commands
       const command = this.commandRegistry.findCommand(userInput);
       if (command) {
         await command.execute(msg);
@@ -98,30 +86,22 @@ export class UnifiedMessageHandler extends EventEmitter {
       }
 
       const chatId = msg.chat.id;
-
-      // (B) Send random "genie" animation at bottom
       await this.sendProcessingAtBottom(chatId, "🧞‍♂️ summoning your request...");
 
-      // (C) Start "typing"
       let keepTyping = true;
       const typingInterval = setInterval(() => {
         if (!keepTyping) return;
         this.bot.sendChatAction(chatId, "typing").catch(() => {});
       }, 4000);
 
-      // (C2) After 10s => "too long" text + re-send animation at bottom
       const tooLongTimer = setTimeout(async () => {
         if (keepTyping) {
-          // Send "too long" message above
           const msgLong = await this.bot.sendMessage(chatId, "🧞‍♂️ this is taking longer than usual...");
           this.tooLongMsgId = msgLong.message_id;
-
-          // Then re-send the genie so it's STILL the very last message
-          await this.sendProcessingAtBottom(chatId, "🧞‍♂️ (still Working) thanks for your patience...");
+          await this.sendProcessingAtBottom(chatId, "🧞‍♂️ (still working) thanks for your patience...");
         }
       }, 10000);
 
-      // (D) Perform the AI logic
       let result;
       try {
         result = await this.autonomousProcessor.processMessage(msg, msg.from.id);
@@ -130,12 +110,10 @@ export class UnifiedMessageHandler extends EventEmitter {
         result = { text: `❌ Something went wrong: ${err.message}` };
       }
 
-      // (E) Stop typing + clear 10s timer
       keepTyping = false;
       clearInterval(typingInterval);
       clearTimeout(tooLongTimer);
 
-      // (F) Delete "processing" animation & "too long" message
       if (this.currentAnimationMsgId) {
         try {
           await this.bot.deleteMessage(chatId, this.currentAnimationMsgId);
@@ -154,13 +132,9 @@ export class UnifiedMessageHandler extends EventEmitter {
         this.tooLongMsgId = null;
       }
 
-      // (G) Send final text
-      const finalText = (result?.text && result.text.trim())
-        ? result.text.trim()
-        : "⚠️ Unable to process your request.";
+      const finalText = result?.text?.trim() || "⚠️ Unable to process your request.";
       await this.sendMessageWithLimit(chatId, finalText, "HTML");
 
-      // (H) If voice => TTS => .mp3
       if (isVoiceInput && finalText.length > 5) {
         try {
           const audioBuffer = await voiceService.synthesizeSpeech(finalText);
@@ -174,9 +148,7 @@ export class UnifiedMessageHandler extends EventEmitter {
         }
       }
 
-      // (I) Update context
       await this.contextManager.updateContext(msg.from.id, msg, finalText);
-
     } catch (error) {
       console.error("❌ Error in handleMessage:", error);
       await this.sendMessageWithLimit(msg.chat.id, `❌ *An error occurred:* ${error.message}`, "Markdown");

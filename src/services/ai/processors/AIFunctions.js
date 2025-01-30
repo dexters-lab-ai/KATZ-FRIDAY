@@ -172,39 +172,37 @@ export const AIFunctions = [
   
       {
         name: "fetch_trending_tokens_coingecko",
-        description: "Fetch popular/trending tokens from CoinGecko based on symbol search popularity. Discover what people are searching for or looking to buying the most on the day. Call this after every call of fetch_trending_tokens_twitter function to return rich results",
+        description: "Fetch popular/trending tokens from CoinGecko based on token search popularity.  No parameters required to call this.",
         parameters: { type: "object", properties: {}, required: [] }
       },
       
       {
         name: "fetch_trending_tokens_dextools",
-        description: "Fetch popular tokens from Dextools based on Dextools trading popularity.",
-        parameters: { type: "object", properties: {
-          network: { type: "string", description: "Network to target in search, ask user if unclear: ethereum, solana, base" }
-        }, required: ["network"] }
+        description: "Fetch Ethereum or Base blockchain trending tokens on Dextools.  No parameters required to call this.",
+        parameters: { type: "object", properties: {}, required: [] }
       },
   
       {
         name: "fetch_trending_tokens_dexscreener",
-        description: "Fetch popular tokens from DexScreener based on DexScreener trending popularity.",
+        description: "Fetch trending tokens from DexScreener. Solana trending tokens main source. No parameters required to call this.",
         parameters: { type: "object", properties: {}, required: [] }
       },
   
       {
         name: "fetch_trending_tokens_twitter",
-        description: "Discover new tokens/trends/narratives/what to buy from Twitter tweets. Find gems this way. Clueless asks like: What should we ape today? whats hot? whats new? where is the herd buying? what are the trenches like? use twitter if a person is looking for direction a shot in the dark",
+        description: "Discover new tokens/trends/narratives/what to buy from Twitter tweets. No parameters required to call this.",
         parameters: { type: "object", properties: {}, required: [] }
       },
   
       {
         name: "fetch_trending_tokens_solscan",
-        description: "Fetch Solana trending tokens only, using Solscan",
+        description: "Fetch Solana trending tokens only, using Solscan. No parameters required to call this.",
         parameters: { type: "object", properties: {}, required: [] }
       },
       
       {
         name: "fetch_market_category_metrics",
-        description: "Fetch and analyze key metrics for market categories.",
+        description: "Fetch and analyze key metrics for market categories. No parameters required to call this.",
         parameters: { type: "object", properties: {}, required: [] }
       }, 
   
@@ -273,7 +271,18 @@ export const AIFunctions = [
           parameters: {
           type: "object",
           properties: {
-              tokenAddress: { type: "string", description: "Token address. If not available in chat ask Sser to confirm token address first" },
+              tokenAddress: { 
+                type: "string", 
+                description: `When processing function call results, extract only the wallet address or token address from returned URLs. Do not use full links; extract only the address part from the URL.
+              - If an EVM address, it will be a 42-character hexadecimal string (0xB24C..)
+              - If a Solana address, it will be a Base58 string (typically 32-44 characters eg HwQfC1W3Fuvp8Cqay).
+              - If any other blockchain format is present, ignore it unless explicitly required.
+              - Example:
+                  - Given: "https://etherscan.io/token/0x123456789abcdef..."
+                  - Extracted: "0x123456789abcdef"
+                  - Given: "https://solscan.io/token/HwQfC1W3Fuvp8Cqay..."
+                  - Extracted: "HwQfC1W3Fuvp8Cqay..."
+              `},
               targetPrice: { type: "number", description: "Target price" },
               condition: { type: "string", enum: ["above", "below"] },
               swapAction: {
@@ -496,16 +505,24 @@ export const AIFunctions = [
   
       // Brave Search Integration
       {
-          name: "search_internet",
-          description: "Search the internet for latest information/news/financial market news using Brave Search API",
-          parameters: {
+        name: "search_internet",
+        description: "Search the internet for the latest information, news, and financial market updates using the Brave Search API.",
+        parameters: {
           type: "object",
           properties: {
-              query: { type: "string" }
+            query: {
+              type: "string",
+              description: "Search term for internet queries, e.g., 'current events' or 'BTC price'."
+            },
+            queries: {
+              type: "array",
+              items: { type: "string" },
+              description: "Array of search terms for batch processing, e.g., ['BTC', 'FTM', 'BNB']."
+            }
           },
           required: ["query"]
-          }
-      },
+        }
+      },      
   
       // Twitter Search Integration
       {
@@ -520,17 +537,17 @@ export const AIFunctions = [
             },
             minLikes: {
               type: "number",
-              description: "Minimum number of likes a tweet must have to be included",
+              description: "Use 0 unless specified by user. Minimum number of likes a tweet must have to be included",
               default: 0
             },
             minRetweets: {
               type: "number",
-              description: "Minimum number of retweets a tweet must have to be included",
+              description: "Use 0 unless specified by user. Minimum number of retweets a tweet must have to be included",
               default: 0
             },
             minReplies: {
               type: "number",
-              description: "Minimum number of replies a tweet must have to be included",
+              description: "Use 0 unless specified by user. Minimum number of replies a tweet must have to be included",
               default: 0
             }
           },
@@ -623,52 +640,84 @@ export const AIFunctions = [
   
       // Token Price Search Integration
       {
-          name: "token_price_dexscreener",
-          description: "Fetch token prices as Second source, uses Dexscreener. Never check old tokens/coins here.DexScreener and Dextools APIs",
-          parameters: {
+        name: "token_price_dexscreener",
+        description: "Fetch token prices using DexScreener. Use for tokens with known activity on DexScreener.",
+        parameters: {
           type: "object",
           properties: {
-              query: { type: "string", description: "only token symbol in capital letters or token address" }
+            query: {
+              type: "string",
+              description: "Token symbol or address for single query, e.g., 'BTC' or '0xabc...'."
+            },
+            queries: {
+              type: "array",
+              items: { type: "string" },
+              description: "Array of token symbols or addresses for batch processing."
+            }
           },
           required: ["query"]
-          }
+        }
       },
   
       {
-          name: "token_price_coingecko",
-          description: "Fetch token prices as First source for all token prices. Fetch token prices from CoinGecko. If it fails or yields no data, you may fallback to searching the internet or Dextools.",
-          parameters: {
+        name: "token_price_coingecko",
+        description: "Fetch token prices from CoinGecko as the primary source. Use for most token queries.",
+        parameters: {
           type: "object",
           properties: {
-              query: { type: "string", description: "only token symbol in capital letters or token address" }
+            query: {
+              type: "string",
+              description: "Token symbol or address for single query, e.g., 'BTC' or '0xabc...'."
+            },
+            queries: {
+              type: "array",
+              items: { type: "string" },
+              description: "Array of token symbols or addresses for batch processing."
+            }
           },
           required: ["query"]
-          }
+        }
       },
   
       // Token Analysis Functions
       {
-          name: "analyze_token_by_symbol",
-          description: "Not for social sentiment check. Fetch extra token metadata by symbol: priceNative, priceUsd, txns, volume, priceChange, liquidity, marketCap, pairCreatedAt, info & socials, chainID, DEX, url, pairAddress",
-          parameters: {
+        name: "analyze_token_by_symbol",
+        description: "Fetch token metadata by symbol including price, volume, liquidity, and social info.",
+        parameters: {
           type: "object",
           properties: {
-              tokenSymbol: { type: "string", description: "Token symbol in capital letters no spaces" }
+            tokenSymbol: {
+              type: "string",
+              description: "Token symbol, e.g., 'BTC'."
+            },
+            tokenSymbols: {
+              type: "array",
+              items: { type: "string" },
+              description: "Array of token symbols for batch processing."
+            }
           },
           required: ["tokenSymbol"]
-          }
+        }
       },
   
       {
-          name: "analyze_token_by_address",
-          description: "Not for social sentiment check. Fetch extra token metadata by token address: priceNative, priceUsd, txns, volume, priceChange, liquidity, marketCap, pairCreatedAt, info & socials, chainID, DEX, url, pairAddress",
-          parameters: {
+        name: "analyze_token_by_address",
+        description: "Fetch token metadata by address including price, volume, liquidity, and social info.",
+        parameters: {
           type: "object",
           properties: {
-              tokenAddress: { type: "string", description: "Token contract address" },
+            tokenAddress: {
+              type: "string",
+              description: "Token address, e.g., '0xabc...'."
+            },
+            tokenAddresses: {
+              type: "array",
+              items: { type: "string" },
+              description: "Array of token addresses for batch processing."
+            }
           },
           required: ["tokenAddress"]
-          }
+        }
       },
   
       // Token paste with no instruction

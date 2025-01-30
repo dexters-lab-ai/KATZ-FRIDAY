@@ -226,7 +226,7 @@ class TwitterService extends EventEmitter {
         console.warn('Cashtag is empty or invalid, skipping search.');
         return []; // Return empty array instead of throwing an error
       }
-      //console.log("Cleaned cashtag$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$:", cleanCashtag + " minLikes:", minLikes + " minRetweets:", minRetweets + " minReplies:", minReplies)
+      console.log("Cleaned cashtag $$$$$$$$$$$$$$ ", cleanCashtag + " minLikes:", minLikes + " minRetweets:", minRetweets + " minReplies:", minReplies)
   
       // Check cache for the cashtag
       const cached = this.getFromCache(cleanCashtag);
@@ -239,14 +239,12 @@ class TwitterService extends EventEmitter {
       // Prepare Apify actor input
       const input = {
         cashtag: cleanCashtag,
-        cookies: [
-          "auth_token=c4b06af562684becacf328f731ef500bc40d7ba2;gt=1877600704254324976;guest_id=v1%3A173648987381985233;twid=u%3D1479073844589895680;att=1-Rfvy3D8ari2uGIrW769stMMWq02ZRanOwSnDc7S8;ct0=efafe77c36a545a6fd1648bc4f432ddd612844fbb288d56d8009996a05f9a394d9ad1d2fa62a0685c25699cc0966e61c793d0483b1cbaa3496b46cea14da48ecc6af096b5e2ed0fa6305c6458620f1fe;guest_id_ads=v1%3A173648987381985233;guest_id_marketing=v1%3A173648987381985233;kdt=O83gjfkTl8AaNp5z3JXyUGdr1k0xFZPBwD9myC97;personalization_id=v1_SkJRGfsm95VskQ4ujBPgEQ=="
-        ],
+        cookies: [config.apifyCookieToken],
         onlyBuleVerifiedUsers: false,
         onlyVerifiedUsers: false,
         sentimentAnalysis: true,
         sortBy: "Latest",
-        maxItems: 20, // Ensure API returns only the latest 8 tweets
+        maxItems: 100, // Ensure API returns only the latest 8 tweets
         minRetweets: minRetweets,
         minLikes: minLikes,
         minReplies: minReplies

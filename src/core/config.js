@@ -20,6 +20,7 @@ class Config {
     this.alchemyApiKey = process.env.ALCHEMY_API_KEY || 'ip7ONCr6sDycSojM_PZoWawrVM_2c0RW';
     this.solanaApiKey = process.env.SOLANA_API_KEY || 'ip7ONCr6sDycSojM_PZoWawrVM_2c0RW';
     this.apifyApiKey = process.env.APIFY_API_KEY;
+    this.apifyCookieToken = process.env.APIFY_COOKIE_KEY;
     this.braveApiKey  = process.env.BRAVE_API_KEY;
     this.bitrefillApiKey = process.env.BITREFILL_API_KEY;
 

@@ -2,6 +2,12 @@ import dotenv from 'dotenv';
 dotenv.config();
 import axios from 'axios';
 
+// OpenSSL & Ngrok Tunneling 
+import https from "https";
+import fs from "fs";
+import express from "express";
+import { fileURLToPath } from "url";
+
 // Core services
 import { bot } from './core/bot.js';
 import { setupCommands } from './commands/index.js';
@@ -109,7 +115,28 @@ async function startAgent() {
 
     console.log('✅ KATZ AI Agent is up and running!');
 
-    //5. Extras
+    // 5. Extras
+    // Ngrok tunneling for our Google Cloud
+    const __dirname = path.dirname(fileURLToPath(import.meta.url));
+    const filePath = path.join(__dirname, 'config/openssl/trades.json');
+
+    try {
+      const app = express();
+      
+      // Reading SSL certificate and key files
+      const options = {
+        key: fs.readFileSync(path.join(__dirname, 'key.pem')),
+        cert: fs.readFileSync(path.join(__dirname, 'cert.pem')),
+      };
+
+      // Creating an HTTPS server
+      https.createServer(options, app).listen(8080, () => {
+        console.log("✅ Ngrok Server running on https://localhost:8080");
+      });
+    } catch (error) {
+      console.error('❌ Error setting up Ngrok Tunneling:', error);
+    }    
+
     await priceAlertService.initialize();
 
     // Initialize Pirce Monitoring Websockets    

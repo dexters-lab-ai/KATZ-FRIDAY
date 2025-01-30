@@ -26,7 +26,7 @@ export class HelperFunctions {
   validateRequiredParameters(functionName, args) {
     const def = this.functions.find((f) => f.name === functionName);
     if (!def) throw new Error(`No function definition for '${functionName}'.`);
-
+  
     const required = def.parameters?.required || [];
     const missing = required.filter((p) => !(p in args));
     if (missing.length) {
@@ -34,36 +34,62 @@ export class HelperFunctions {
         `Missing required parameters for '${functionName}': ${missing.join(", ")}`
       );
     }
-  }
+  
+    // Validate batch processing case
+    if (Array.isArray(args.queries) && args.queries.length === 0) {
+      throw new Error(`'queries' must contain at least one element for '${functionName}'.`);
+    }
+  
+    // Ensure batch and single aren't both present
+    if ("query" in args && "queries" in args) {
+      throw new Error(
+        `Both 'query' and 'queries' cannot be present for '${functionName}'. Use one.`
+      );
+    }
+  }  
 
   /**
    * Validate or gather missing params from user
    */
   async validateFollowUpParameters(functionName, args, userId, msg) {
     let parsed;
+    
+    // Log the raw arguments received
+    // console.log("🟢 Received arguments:", { functionName, args, userId, chatId: msg.chat?.id });
+  
     try {
-      // Ensure we have a valid object
-      parsed = (typeof args === "string")
-        ? JSON.parse(args)
-        : { ...args };
-
+      // Parse the arguments
+      parsed = typeof args === "string" ? JSON.parse(args) : { ...args };
+  
+      // Log the parsed arguments
+     // console.log("🟢 Parsed arguments:", { functionName, parsed });
     } catch (parseErr) {
-+     // ADDED: More robust parse error handling
-      console.error("❌ Failed to parse arguments:", parseErr.message);
+      console.error("❌ Failed to parse arguments:", parseErr.message, { args });
       throw new Error(`Invalid JSON arguments for '${functionName}': ${parseErr.message}`);
     }
-
+  
     try {
+      // Validate required parameters
       this.validateRequiredParameters(functionName, parsed);
+  
+      // Log validation success
+      // console.log("✅ Parameters validated for:", { functionName, parsed });
+  
       return parsed;
     } catch (err) {
+      console.error("❌ Parameter validation failed:", err.message);
+  
       const match = err.message.match(/Missing required parameters for '.*?': (.+)/);
       if (!match) throw err; // It's some other error, re-throw
-
+  
       const missingParams = match[1].split(", ").map((x) => x.trim());
+  
+      // Log missing parameters
+      console.log("⚠️ Missing parameters detected:", { missingParams });
+  
       return await this.handleMissingParameters(functionName, parsed, missingParams, msg);
     }
-  }
+  }  
 
   /**
    * Dynamically ask user for missing fields
@@ -116,249 +142,95 @@ export class HelperFunctions {
     }
   }
 
+  
   /**
-   * Use a template or just a single step
+   * buildTaskTree
+   * -------------
+   * Creates a multi-step task array from the initial function call,
+   * possibly splitting into repeated sub-tasks if arguments contain
+   * an array of items to process (e.g., multiple queries or tokens).
    */
-  buildTaskTree(templateName, initialTask) {
-    if (!initialTask?.name) {
-      throw new Error("Invalid initialTask: missing name.");
+  buildTaskTree(templateName, initialFunctionCall) {
+    if (!initialFunctionCall || !initialFunctionCall.name) {
+      throw new Error("Invalid initial function call: missing 'name'.");
     }
-
-    /**
-     * multiTaskTemplates
-     * ------------------
-     * Each template is a high-level user flow. The array defines the steps in order,
-     * plus any dependencies. The agent can decide to call these flows if it deems them relevant,
-     * or you can explicitly name them in your logic.
-     */
-    const multiTaskTemplates = {
-
-      research_scan_trade: [
-        { name: "analyze_token_by_symbol", dependencies: [], arguments: {} },
-        { name: "execute_trade", dependencies: ["analyze_token_by_symbol"], arguments: {} },
-        { name: "create_price_alert", dependencies: ["execute_trade"], arguments: {} },
-      ],
-
-      portfolio_review_alert: [
-        { name: "get_portfolio", dependencies: [], arguments: {} },
-        { name: "create_price_alert", dependencies: ["get_portfolio"], arguments: {} },
-      ],
-
-      flipper_mode_setup: [
-        { name: "setup_flipper_mode", dependencies: [], arguments: {} },
-        { name: "start_flipper_mode", dependencies: ["setup_flipper_mode"], arguments: {} },
-        { name: "fetch_flipper_mode_metrics", dependencies: ["start_flipper_mode"], arguments: {} },
-      ],
-
-      // -------------------------------
-      // NEW / UPDATED FLOWS
-      // -------------------------------
-
-      /**
-       * A multi-step flow for discovering new tokens using multiple sources
-       * (unified, CoinGecko, Twitter) and possibly searching the internet,
-       * then analyzing a chosen token and creating a price alert.
-       */
-      comprehensive_discovery_flow: [
-        // 1) Fetch top tokens from multiple combined sources
-        { name: "fetch_trending_tokens_unified", dependencies: [], arguments: {} },
-
-        // 2) Fetch popular/trending tokens from CoinGecko
-        { name: "fetch_trending_tokens_coingecko", dependencies: ["fetch_trending_tokens_unified"], arguments: {} },
-
-        // 3) Twitter check for daily hype
-        { name: "fetch_trending_tokens_twitter", dependencies: ["fetch_trending_tokens_coingecko"], arguments: {} },
-
-        // 4) Optionally search the internet for additional background
-        { name: "search_internet", dependencies: ["fetch_trending_tokens_twitter"], arguments: {} },
-
-        // 5) Possibly analyze a single token in depth
-        { name: "analyze_token_by_symbol", dependencies: ["search_internet"], arguments: {} },
-
-        // 6) Create a price alert if user wants to track it
-        { name: "create_price_alert", dependencies: ["analyze_token_by_symbol"], arguments: {} },
-
-        // 7) Setup a reminder about this discovery (in case user wants to revisit)
-        { name: "set_reminder", dependencies: ["create_price_alert"], arguments: {} },
-
-        // 8) Start monitoring reminders
-        { name: "start_monitoring_reminders", dependencies: ["set_reminder"], arguments: {} },
-
-        // 9) Generate a final Google report to summarize everything
-        { name: "generate_google_report", dependencies: ["start_monitoring_reminders"], arguments: {} },
-        
-        // Optionally check sentiment on Twitter
-        { name: "fetch_tweets_for_symbol", dependencies: [], arguments: {} },
-        
-         // Optionally check price on coingecko
-         { name: "token_price_coingecko", dependencies: [], arguments: {} },
-        
-        // Option search token by address
-        { name: "analyze_token_by_address", dependencies: [], arguments: {} },
-
-        // Optionally execute trade
-        { name: "execute_trade", dependencies: [], arguments: {} },
-      ],
-
-      /**
-       * A simpler flow for just discovering tokens on one chain, checking sentiment,
-       * then analyzing it, and setting an alert. Could be used instead of the more
-       * comprehensive approach above.
-       */
-      token_discovery_flow: [
-        // 1) fetch trending tokens for a chosen chain
-        { name: "fetch_trending_tokens_by_chain", dependencies: [], arguments: {} },
-        // 2) check sentiment on Twitter
-        { name: "fetch_tweets_for_symbol", dependencies: ["fetch_trending_tokens_by_chain"], arguments: {} },
-        // 3) analyze token
-        { name: "analyze_token_by_symbol", dependencies: ["fetch_tweets_for_symbol"], arguments: {} },
-        // 4) create alert
-        { name: "create_price_alert", dependencies: ["analyze_token_by_symbol"], arguments: {} },
-        // Optionally execute trade
-        { name: "execute_trade", dependencies: [], arguments: {} },
-        // Option search token by address
-        { name: "analyze_token_by_address", dependencies: [], arguments: {} },
-      ],
-
-      /**
-       * A broad “research + email” flow that:
-       * 1) searches the internet for info
-       * 2) sets a Google reminder
-       * 3) starts monitoring
-       * 4) generates a summary report
-       */
-      research_and_email_flow: [
-        { name: "search_internet", dependencies: [], arguments: {} },
-        { name: "set_reminder", dependencies: ["search_internet"], arguments: {} },
-        { name: "start_monitoring_reminders", dependencies: ["set_reminder"], arguments: {} },
-        { name: "generate_google_report", dependencies: ["start_monitoring_reminders"], arguments: {} },
-      ],
-
-      /**
-       * A multi-step flow for:
-       * 1) Approving a token,
-       * 2) Executing a trade,
-       * 3) Then creating a price alert (and/or searching news).
-       */
-      defi_approval_trade: [
-        // You might want to check your portfolio first
-        { name: "get_portfolio", dependencies: [], arguments: {} },
-        // Approve token
-        { name: "approve_token", dependencies: ["get_portfolio"], arguments: {} },
-        // Execute trade
-        { name: "execute_trade", dependencies: ["approve_token"], arguments: {} },
-        // Create alert
-        { name: "create_price_alert", dependencies: ["execute_trade"], arguments: {} },
-        // Optionally do a quick news search
-        { name: "search_internet", dependencies: ["create_price_alert"], arguments: {} },
-        // Optionally check Twitter as source of validation
-        { name: "fetch_tweets_for_symbol", dependencies: [], arguments: {} },
-        // Email confirmation
-        { name: "set_reminder", dependencies: ["execute_trade"], arguments: {} },
-      ],
-
-       /**
-       * A multi-step flow for:
-       * 1) Checking the word on the street (trench)
-       * 2) Executing a trade,
-       * 3) Then creating a price alert (and/or searching news).
-       */
-       social_sentiment_trade: [
-        // Optionally do a quick news search
-        { name: "search_internet", dependencies: ["create_price_alert"], arguments: {} },
-        // 3) Twitter check for daily hype
-        { name: "fetch_trending_tokens_twitter", dependencies: [], arguments: {} },
-        // Optionally check Twitter as source of validation
-        { name: "fetch_tweets_for_symbol", dependencies: [], arguments: {} },
-        // Optionally check price on coingecko
-        { name: "token_price_coingecko", dependencies: [], arguments: {} },
-        // You might want to check your portfolio first
-        { name: "get_portfolio", dependencies: [], arguments: {} },
-        // Approve token
-        { name: "approve_token", dependencies: ["get_portfolio"], arguments: {} },
-        // Execute trade
-        { name: "execute_trade", dependencies: ["approve_token"], arguments: {} },
-        // Create alert
-        { name: "create_price_alert", dependencies: ["execute_trade"], arguments: {} },
-        // Email confirmation
-        { name: "set_reminder", dependencies: ["execute_trade"], arguments: {} },
-      ],
-
-      /**
-       * A multi-step flow for:
-       * 1) Internet Searches
-       */
-      internet_searches_multiple: [
-        // Optionally do a quick news search
-        { name: "search_internet", dependencies: [], arguments: {} },
-        // Search in sequence
-        { name: "search_internet", dependencies: ["search_internet"], arguments: {} },
-      ],
-
-      /**
-       * Another example: bitrefill shopping flow
-       */
-      bitrefill_giftcard_flow: [
-        { name: "start_bitrefill_shopping_flow", dependencies: [], arguments: {} },
-        { name: "check_bitrefill_payment_status", dependencies: ["start_bitrefill_shopping_flow"], arguments: {} },
-      ],
-
-      /**
-       * Solana payment workflow:
-       * 1) get portfolio for sol balance
-       * 2) create solana pay
-       */
-      solana_payment_workflow: [
-        { name: "get_portfolio", dependencies: [], arguments: {} },
-        { name: "create_solana_payment", dependencies: ["get_portfolio"], arguments: {} },
-      ],
-
-      /**
-       * Explore categories from CoinGecko, pick a category, get coins,
-       * analyze one of them.
-       */
-      market_category_exploration: [
-        { name: "fetch_market_categories", dependencies: [], arguments: {} },
-        { name: "fetch_coins_by_category", dependencies: ["fetch_market_categories"], arguments: {} },
-        { name: "analyze_token_by_symbol", dependencies: ["fetch_coins_by_category"], arguments: {} },
-      ],
-
-      /**
-       * KOL monitoring:
-       * 1) start monitoring
-       * 2) optionally stop
-       */
-      kol_monitoring_flow: [
-        { name: "monitor_kol", dependencies: [], arguments: {} },
-        { name: "stop_monitor_kol", dependencies: ["monitor_kol"], arguments: {} },
-      ],
-    };
-
-    // If the user explicitly provided a templateName in the function call
-    if (templateName && multiTaskTemplates[templateName]) {
-      return multiTaskTemplates[templateName].map((task, i) => ({
-        ...task,
-        step: i + 1,
+  
+    // Common single-task fallback
+    const singleTask = [
+      {
+        name: initialFunctionCall.name,
+        dependencies: [],
+        arguments: initialFunctionCall.arguments || "{}"
+      }
+    ];
+  
+    // Parse the function arguments
+    let args;
+    try {
+      args = JSON.parse(initialFunctionCall.arguments || "{}");
+    } catch (err) {
+      console.warn("buildTaskTree: Could not parse arguments, fallback to singleTask.");
+      return singleTask;
+    }
+  
+    const fnName = initialFunctionCall.name;
+  
+    // Check if arguments has an array we want to split
+    // We'll do a helper function:
+    function createRepeatedSubTasks(arrayOfItems, baseFunctionName, paramName) {
+      // E.g. for each item in arrayOfItems => build sub-task
+      // To run them in parallel (no dependencies),
+      // set dependencies: [].
+      // To run them in sequence, chain them.
+      return arrayOfItems.map((item, idx) => ({
+        name: baseFunctionName,
+        // Lets not experiment with this:
+        // chaining means If one task fails, it might block all subsequent tasks,well not really
+        // but also this increases latency as each task must wait for the previous
+        // For sequential chaining, do: dependencies: idx === 0 ? [] : [`${baseFunctionName}_${idx - 1}`]
+        dependencies: [],
+        // arguments: a JSON string for that item
+        arguments: JSON.stringify({ [paramName]: item }),
+        alias: `${baseFunctionName}_${idx}` // optional alias
       }));
     }
-
-    // Fallback: single-step array from the initial function call
-    return [
-      {
-        name: initialTask.name,
-        step: 1,
-        dependencies: [],
-        arguments: initialTask.arguments || {},
-      },
-    ];
+  
+    // We'll detect if the user wants repeated calls.
+    // For example, user calls "search_internet" with an array of queries.
+    // Or "token_price_dexscreener" with multiple queries, etc.
+  
+    // 1) For "search_internet"
+    if (
+      (fnName === "search_internet" && Array.isArray(args.queries)) ||
+      (fnName === "token_price_dexscreener" && Array.isArray(args.queries)) ||
+      (fnName === "token_price_coingecko" && Array.isArray(args.queries)) ||
+      (fnName === "analyze_token_by_symbol" && Array.isArray(args.symbols)) ||
+      (fnName === "analyze_token_by_address" && Array.isArray(args.addresses))
+    ) {
+      let paramName = "query";
+      let items = args.queries;
+  
+      if (fnName === "analyze_token_by_symbol") {
+        paramName = "tokenSymbol";
+        items = args.symbols;
+      } else if (fnName === "analyze_token_by_address") {
+        paramName = "tokenAddress";
+        items = args.addresses;
+      }
+  
+      return createRepeatedSubTasks(items, fnName, paramName);
+    }
+  
+    // If none of the above pattern matches or no array => fallback single
+    return singleTask;
   }
-
+  
   /**
    * Format an object/array to string, handle large data
    */
   /**
    * Send a message in HTML, splitting into multiple messages if text > 4096 chars.
-   */
+  */
   async sendMessageWithLimit(chatId, text, parseMode = "HTML") {
     const chunkSize = MAX_TELEGRAM_CHARS;
     let start = 0;
@@ -375,8 +247,9 @@ export class HelperFunctions {
    * Moved from old code, no markdown escaping. 
    * If you want to protect HTML, do an optional escapeHtml.
    */
-  formatResultForDisplay(result, limit = 100) {
-    if (result == null) return "No data.";
+  formatResultForDisplay(result) {
+    const limit = 200;
+    if (result == null) return "Oops, No data to format for display.";
 
     const processValue = (val, path = "") => {
       if (val == null) return "null";
@@ -414,12 +287,41 @@ export class HelperFunctions {
 
   /**
    * formatResults
-   * For multi-step final summary
+   * -------------
+   * Formats and trims the combined results from multiple tasks.
+   * If there are multiple objects or arrays, trims the last third.
+   * Ensures that the final summary is concise and within desired limits.
    */
-  formatResults(results) {
-    return results
-      .map((res, i) => `Step ${i + 1}:\n${res}`)
-      .join("\n\n");
+  formatResults(resultsArray) {
+    if (!Array.isArray(resultsArray) || resultsArray.length === 0) {
+      return "⚠️ No results to display.";
+    }
+
+    // Check if there are multiple objects/arrays
+    if (resultsArray.length > 1) {
+      const total = resultsArray.length;
+      const trimCount = Math.ceil(total / 3); // Trim the last third
+      const trimmedResults = resultsArray.slice(0, total - trimCount);
+
+      // Optionally, notify about trimming
+      if (trimCount > 0) {
+        trimmedResults.push(`⚠️ Some results have been trimmed to maintain conciseness.`);
+      }
+
+      return trimmedResults.map(result => {
+        if (typeof result === 'object') {
+          return JSON.stringify(result, null, 2);
+        }
+        return result.toString();
+      }).join("\n\n");
+    }
+
+    // If only one result, format it accordingly
+    const singleResult = resultsArray[0];
+    if (typeof singleResult === 'object') {
+      return JSON.stringify(singleResult, null, 2);
+    }
+    return singleResult.toString();
   }
 
   /**

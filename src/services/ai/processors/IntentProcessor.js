@@ -89,97 +89,128 @@ export class IntentProcessor extends EventEmitter {
 
   async createPriceAlert(userId, chatId, params) {
     let logMessageId = null;
-  
+
     const log = async (chatId, message) => {
-      if (!chatId) return; // Skip logging if chatId is unavailable
-      try {
-        if (!logMessageId) {
-          const sentMessage = await this.bot.sendMessage(chatId, message);
-          logMessageId = sentMessage.message_id;
-        } else {
-          await this.bot.telegram.editMessageText(chatId, logMessageId, null, message);
+        if (!chatId) return; // Skip logging if chatId is unavailable
+        try {
+            if (!logMessageId) {
+                const sentMessage = await this.bot.sendMessage(chatId, message);
+                logMessageId = sentMessage.message_id;
+            } else {
+                await this.bot.telegram.editMessageText(chatId, logMessageId, null, message);
+            }
+        } catch (err) {
+            console.warn('⚠️ Error logging message:', err.message);
         }
-      } catch (err) {
-        console.warn('⚠️ Error logging message:', err.message);
-      }
     };
-  
+
     try {
-  
-      // Step 1: Log the start of the operation
-      await log(chatId, '🚀 Creating price alert...');
-  
-      // Step 2: Determine the network and token info
-      const tokenData = await this.getTokenNetwork(params.tokenAddress);
-      if (!tokenData) {
-        throw new Error('Unable to determine the network or find token information.');
-      }
-  
-      const { network, tokenInfo } = tokenData;
-      await log(chatId, `✅ Network determined: ${network}\n\nToken Info:\n- Symbol: ${tokenInfo.symbol}\n- Address: ${tokenInfo.address}`);
-  
-      // Step 3: Get user wallet address
-      const wallets = await walletService.getWalletsByNetwork(userId, network);
-      if (!wallets.length) {
-        throw new Error(`No wallets found for network ${network}. Please add a wallet for this network.`);
-      }
-  
-      const walletAddress = wallets[0].address;
-      await log(chatId, `✅ Using wallet: ${walletAddress}`);
-  
-      // Step 4: Validate and prepare alert data
-      if (!params.targetPrice || typeof params.targetPrice !== 'number' || params.targetPrice <= 0) {
-        throw new Error('Invalid target price. It must be a positive number.');
-      }
-  
-      if (!['above', 'below'].includes(params.condition)) {
-        throw new Error('Invalid condition. Must be "above" or "below".');
-      }
-  
-      const alertData = {
-        tokenAddress: params.tokenAddress,
-        network,
-        targetPrice: params.targetPrice,
-        condition: params.condition,
-        walletType: 'internal', // Default to internal wallet type
-        swapAction: params.swapAction || { enabled: false }, // Default swapAction structure
-        walletAddress,
-      };
-  
-      // Step 5: Create the price alert
-      const alert = await priceAlertService.createAlert(userId, alertData);
-  
-      await log(chatId, `🎉 Price alert created successfully!\nToken: ${tokenInfo.symbol}\nTarget Price: ${params.targetPrice}\nCondition: ${params.condition}`);
-  
-      // Schedule deletion of the log message after 30 seconds
-      setTimeout(async () => {
-        try {
-          if (logMessageId) {
-            await this.bot.telegram.deleteMessage(chatId, logMessageId);
-          }
-        } catch (err) {
-          console.warn('⚠️ Could not delete log message:', err.message);
+        // Step 1: Log the start of the operation
+        await log(chatId, '🚀 Creating price alert...');
+
+        // Step 2: Process and clean the token address input
+        params.tokenAddress = processUrlInput(params.tokenAddress);
+        if (!params.tokenAddress || params.tokenAddress === "No valid address found in URL") {
+            throw new Error("Invalid token address. Please provide a valid token address.");
         }
-      }, 30000);
-  
-      return alert;
+
+        // Step 3: Determine the network and token info
+        const tokenData = await this.getTokenNetwork(params.tokenAddress);
+        if (!tokenData) {
+            throw new Error('Unable to determine the network or find token information.');
+        }
+
+        const { network, tokenInfo } = tokenData;
+        await log(chatId, `✅ Network determined: ${network}\n\nToken Info:\n- Symbol: ${tokenInfo.symbol}\n- Address: ${tokenInfo.address}`);
+
+        // Step 4: Get user wallet address
+        const wallets = await walletService.getWalletsByNetwork(userId, network);
+        if (!wallets.length) {
+            throw new Error(`No wallets found for network ${network}. Please add a wallet for this network.`);
+        }
+
+        const walletAddress = wallets[0].address;
+        await log(chatId, `✅ Using wallet: ${walletAddress}`);
+
+        // Step 5: Validate and prepare alert data
+        if (!params.targetPrice || typeof params.targetPrice !== 'number' || params.targetPrice <= 0) {
+            throw new Error('Invalid target price. It must be a positive number.');
+        }
+
+        if (!['above', 'below'].includes(params.condition)) {
+            throw new Error('Invalid condition. Must be "above" or "below".');
+        }
+
+        const alertData = {
+            tokenAddress: params.tokenAddress,
+            network,
+            targetPrice: params.targetPrice,
+            condition: params.condition,
+            walletType: 'internal', // Default to internal wallet type
+            swapAction: params.swapAction || { enabled: false }, // Default swapAction structure
+            walletAddress,
+        };
+
+        // Step 6: Create the price alert
+        const alert = await priceAlertService.createAlert(userId, alertData);
+
+        await log(chatId, `🎉 Price alert created successfully!\nToken: ${tokenInfo.symbol}\nTarget Price: ${params.targetPrice}\nCondition: ${params.condition}`);
+
+        // Schedule deletion of the log message after 30 seconds
+        setTimeout(async () => {
+            try {
+                if (logMessageId) {
+                    await this.bot.telegram.deleteMessage(chatId, logMessageId);
+                }
+            } catch (err) {
+                console.warn('⚠️ Could not delete log message:', err.message);
+            }
+        }, 30000);
+
+        return alert;
     } catch (error) {
-      const chatId = params.chatId;
-      await log(chatId, `❌ Error: ${error.message}`);
-  
-      // Schedule deletion of the error log message after 30 seconds
-      setTimeout(async () => {
-        try {
-          if (logMessageId) {
-            await this.bot.telegram.deleteMessage(chatId, logMessageId);
-          }
-        } catch (err) {
-          console.warn('⚠️ Could not delete error log message:', err.message);
-        }
-      }, 30000);
-  
-      throw error;
+        await log(chatId, `❌ Error: ${error.message}`);
+
+        // Schedule deletion of the error log message after 30 seconds
+        setTimeout(async () => {
+            try {
+                if (logMessageId) {
+                    await this.bot.telegram.deleteMessage(chatId, logMessageId);
+                }
+            } catch (err) {
+                console.warn('⚠️ Could not delete error log message:', err.message);
+            }
+        }, 30000);
+
+        throw error;
     }
+  }
+
+  processUrlInput(input) {
+    const urlPattern = /^(https?:\/\/[^\s]+)$/; // Basic URL pattern
+
+    if (urlPattern.test(input)) {
+        // Input is a URL, extract blockchain address
+        return extractBlockchainAddress(input) || "No valid address found in URL";
+    } else {
+        // Input is not a URL, remove spaces and return
+        return input.replace(/\s+/g, '');
+    }
+  }
+
+  extractBlockchainAddress(url) {
+    const evmPattern = /0x[a-fA-F0-9]{40}/; // EVM Address pattern (Ethereum, Base, etc.)
+    const solanaPattern = /[1-9A-HJ-NP-Za-km-z]{32,44}/; // Solana Address pattern (Base58)
+
+    // Check for EVM address
+    const evmMatch = url.match(evmPattern);
+    if (evmMatch) return evmMatch[0];
+
+    // Check for Solana address
+    const solanaMatch = url.match(solanaPattern);
+    if (solanaMatch) return solanaMatch[0];
+
+    return null; // No valid address found
   }
 
   async viewPriceAlerts() {    
@@ -410,15 +441,23 @@ export class IntentProcessor extends EventEmitter {
   }
 
   async getTrendingTokensByChain(network) {
+    const supportedNetworks = ['ethereum', 'base', 'solana'];
+  
+    if (!supportedNetworks.includes(network.toLowerCase())) {
+      return "I only support Solana, Ethereum and Base for now...";
+    }
+  
     return await trendingService.getTrendingTokensByChain(network);
-  }
+  }  
 
   async getTrendingTokensCoinGecko() {
     return await trendingService.get_trending_coingecko();
   }
 
-  async getTrendingTokensDextools(network) {
-    return await dextools.fetchTrendingTokens(network);
+  async getTrendingTokensDextools() {
+    // Fetch Base and Ethereum and AVAX as parameters
+    // we want to query them in fetchTrendingEVM
+    return await dextools.fetchTrendingEVM();
   }
 
   async getTrendingTokensDexscreener() {

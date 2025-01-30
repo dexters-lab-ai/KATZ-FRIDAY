@@ -105,8 +105,7 @@ export const fallbackMap = {
      * or "fetch_trending_tokens_twitter" if user is looking for public sentiment.
      */
     search_internet: [
-      "fetch_trending_tokens_unified",
-      "fetch_trending_tokens_twitter"
+      "search_internet"
     ],
   
     /**
